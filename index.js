@@ -15,12 +15,13 @@ const newCode = () => {
   const s = Array.from({ length: 10 }, () => ALPHA[crypto.randomInt(ALPHA.length)]).join('');
   return s.slice(0, 5) + '-' + s.slice(5);
 };
-const needAdmin = req => {
-  if (req.auth?.token?.admin !== true) throw new HttpsError('permission-denied', 'Admins only.');
+const needAdmin = async req => {
+  const uid = req.auth?.uid;
+  if (!uid || !(await db.doc('admins/' + uid).get()).exists) throw new HttpsError('permission-denied', 'Admins only.');
 };
 
 exports.generateTags = onCall({ secrets: [PEPPER] }, async req => {
-  needAdmin(req);
+  await needAdmin(req);
   const n = Math.floor(Number(req.data?.count));
   if (!(n >= 1 && n <= 200)) throw new HttpsError('invalid-argument', 'Count must be between 1 and 200.');
   const counter = db.doc('meta/counters');
@@ -83,7 +84,7 @@ exports.claimTag = onCall({ secrets: [PEPPER] }, async req => {
 });
 
 exports.revokeTag = onCall(async req => {
-  needAdmin(req);
+  await needAdmin(req);
   const id = req.data?.tagId;
   if (typeof id !== 'string') throw new HttpsError('invalid-argument', 'tagId required.');
   await db.doc('tags/' + id).update({ status: 'revoked' });

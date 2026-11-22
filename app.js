@@ -155,6 +155,7 @@ document.addEventListener('click', e => {
 addEventListener('popstate', render);
 onAuthStateChanged(auth, async u => {
   user = u;
-  isAdmin = u ? !!(await u.getIdTokenResult(true)).claims.admin : false;
+  isAdmin = false;
+  if (u) { try { isAdmin = (await getDoc(doc(db, 'admins', u.uid))).exists(); } catch { } }
   nav(); render();
 });
