@@ -30,3 +30,22 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 14p
 @keyframes t{from{opacity:0;transform:translate(-50%,10px)}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 @media print{body *{visibility:hidden}.labels,.labels *{visibility:visible}.labels{position:absolute;left:0;top:0}}
+
+/* Phone polish + pet UI */
+body{padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);-webkit-text-size-adjust:100%}
+#nav{flex-wrap:wrap;gap:8px}
+#nav .btn,#nav button{min-height:40px;padding:8px 14px}
+label{display:flex;flex-direction:column;gap:6px;font-weight:700;font-size:14px}
+input{width:100%;min-height:48px;font-size:16px}
+.btn,button{display:inline-flex;align-items:center;justify-content:center;gap:6px;text-align:center;min-height:48px}
+.avatar{border-radius:50%;display:grid;place-items:center;margin:0 auto;flex:none}
+.pet{align-items:center;text-align:center}.pet .btn{width:100%}
+.wa{background:#25D366}
+.types{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.type{position:relative;cursor:pointer}
+.type input{position:absolute;opacity:0;width:1px;min-height:0}
+.type span{display:flex;flex-direction:column;align-items:center;padding:10px 4px;border-radius:16px;font-size:30px;border:3px solid transparent;transition:transform .12s}
+.type span small{font-size:12px;font-weight:700;color:var(--ink)}
+.type input:checked+span{border-color:var(--coral);transform:scale(1.04)}
+.type input:focus-visible+span{outline:3px solid var(--coral)}
+@media(max-width:520px){main{padding:8px 14px 50px}.card{padding:16px}.narrow{margin:12px auto}.hero{padding:16px 0}.grid{grid-template-columns:repeat(2,1fr)}h2{font-size:22px}}

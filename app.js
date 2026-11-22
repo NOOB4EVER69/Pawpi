@@ -33,7 +33,8 @@ function nav() {
 function landing() {
   main.innerHTML = `<section class="hero"><h1>Every Paw Deserves a Way Home.</h1>
   <p>Smart NFC pet tags that help bring lost pets back to the people who love them.</p>
-  <div class="row"><a data-l class="btn" href="/signup">Get Your Pawbi</a><a class="btn ghost" href="#how">How It Works</a></div></section>
+  <div class="row"><a data-l class="btn" href="/signup">Get Your Pawbi</a><a class="btn ghost" href="#how">How It Works</a></div>
+  <div class="row" style="margin-top:22px">${['dog', 'cat', 'rabbit', 'bird'].map(k => avatar(k, 60)).join('')}</div></section>
   <section id="how" class="steps">${['Get your Pawbi tag.', 'Attach it to your pet’s collar.', 'Anyone can scan it to help your pet get home.'].map((t, i) => `<div class="card"><b>Step ${i + 1}</b><p>${t}</p></div>`).join('')}</section>`;
 }
 
@@ -67,6 +68,19 @@ function authPage(signup) {
   });
 }
 
+const TYPES = { dog: ['Dog', '🐶', '#FFE3D6'], cat: ['Cat', '🐱', '#FFF0C9'], rabbit: ['Rabbit', '🐰', '#F3E2F5'], bird: ['Bird', '🐦', '#D9EEFB'], hamster: ['Hamster', '🐹', '#FDE7C8'], horse: ['Horse', '🐴', '#EBDCCB'], turtle: ['Turtle', '🐢', '#CDEFD6'], fish: ['Fish', '🐠', '#D3F0F0'], other: ['Other', '🐾', '#EBDFCB'] };
+const avatar = (s, z = 96) => { const [, e, c] = TYPES[s] || TYPES.other; return `<div class="avatar" style="width:${z}px;height:${z}px;font-size:${Math.round(z * .55)}px;background:${c}">${e}</div>`; };
+
+function petCard(p, t) {
+  const label = (TYPES[p.species] || TYPES.other)[0];
+  return `<div class="card narrow pet">${avatar(p.species, 120)}<h2>${esc(p.name)}</h2><span class="pill">${label}</span>
+  <p>If you found me, please contact my owner 🐾</p>
+  <a class="btn" href="tel:${esc(p.phone)}">📞 Call owner</a>
+  <a class="btn wa" href="https://wa.me/${esc(p.phone.replace(/\D/g, ''))}" target="_blank" rel="noopener">💬 WhatsApp owner</a>
+  ${p.email ? `<a class="btn ghost" href="mailto:${esc(p.email)}">✉️ Email owner</a>` : ''}
+  <small>${esc(t.tagId)}</small></div>`;
+}
+
 async function scan(token) {
   main.innerHTML = '<div class="load">🐾</div>';
   let t = null;
@@ -74,7 +88,7 @@ async function scan(token) {
   const msg = (h, p) => main.innerHTML = `<div class="card narrow"><h2>${h}</h2><p>${p}</p></div>`;
   if (!t) return msg('Tag not found', 'This link doesn’t match a Pawbi tag.');
   if (t.status === 'revoked') return msg('Tag deactivated', 'This Pawbi tag is no longer in use.');
-  if (t.status === 'claimed') return msg('This Pawbi tag is active 🐾', 'Its owner has set it up.');
+  if (t.status === 'claimed') return t.pet ? main.innerHTML = petCard(t.pet, t) : msg('This Pawbi tag is active 🐾', 'Its owner is still setting up the pet profile.');
   if (!user) sessionStorage.setItem('next', location.pathname);
   main.innerHTML = `<div class="card narrow"><h2>Your pet's new identity starts here 🐾</h2><p>Let's connect this tag to your furry friend.</p>
   <span class="pill">${esc(t.tagId)}</span>
@@ -85,19 +99,45 @@ async function scan(token) {
     busy($('#c .btn'), async () => {
       const r = await call('claimTag')({ token, code: e.target.code.value });
       if (!r.ok) throw new Error(r.error);
-      toast('Tag activated! 🎉'); go('/dashboard');
+      toast('Tag activated! 🎉'); go('/pet/' + r.tagId);
     });
   });
 }
+
+const myPets = async () => Object.fromEntries((await getDocs(query(collection(db, 'pets'), where('ownerId', '==', user.uid)))).docs.map(d => [d.data().tagId, d.data()]));
 
 async function dash() {
   if (!user) { sessionStorage.setItem('next', '/dashboard'); return go('/login'); }
   main.innerHTML = '<div class="load">🐾</div>';
   const u = (await getDoc(doc(db, 'users', user.uid))).data() || {};
-  const s = await getDocs(query(collection(db, 'tags'), where('ownerId', '==', user.uid)));
+  const [s, pets] = await Promise.all([getDocs(query(collection(db, 'tags'), where('ownerId', '==', user.uid))), myPets()]);
   main.innerHTML = `<h2>Hey, ${esc(u.name || 'friend')}! Welcome to Pawbi 🐾</h2>
   ${user.emailVerified ? '' : '<p class="note">Please verify your email. We sent a link when you signed up.</p>'}
-  <h3>Your tags</h3><div class="grid">${s.docs.map(d => `<div class="card"><b>${esc(d.id)}</b><span class="pill ok">${esc(d.data().status)}</span></div>`).join('') || '<div class="card">No tags yet. Scan the QR code on your Pawbi packaging to activate one.</div>'}</div>`;
+  <h3>Your pets</h3><div class="grid">${s.docs.map(d => {
+    const t = d.data(), p = pets[t.tagId];
+    return `<div class="card pet">${avatar(p ? p.species : 'other', 72)}<b>${p ? esc(p.name) : 'New tag'}</b><span class="pill ok">${esc(t.tagId)}</span>
+    <a data-l class="btn" href="/pet/${esc(t.tagId)}">${p ? 'Edit pet' : 'Set up pet'}</a>
+    ${p ? `<a class="btn ghost" href="/p/${esc(t.token)}" target="_blank">View public page</a>` : ''}</div>`;
+  }).join('') || '<div class="card">No tags yet. Scan the QR code on your Pawbi packaging to activate one.</div>'}</div>`;
+}
+
+async function petForm(tagId) {
+  if (!user) { sessionStorage.setItem('next', location.pathname); return go('/login'); }
+  const pe = (await myPets())[tagId] || {}, sel = pe.species || 'dog';
+  main.innerHTML = `<form id="pf" class="card narrow"><h2>${pe.name ? 'Edit your pet' : 'Add your pet'} 🐾</h2><span class="pill">${esc(tagId)}</span>
+  <label>Pet name<input name="name" required maxlength="40" value="${esc(pe.name)}" placeholder="Luna" autocomplete="off"></label>
+  <b>Animal type</b>
+  <div class="types">${Object.entries(TYPES).map(([k, [l, e, c]]) => `<label class="type"><input type="radio" name="species" value="${k}" ${k === sel ? 'checked' : ''}><span style="background:${c}">${e}<small>${l}</small></span></label>`).join('')}</div>
+  <label>Your phone (with country code)<input name="phone" type="tel" inputmode="tel" required value="${esc(pe.phone)}" placeholder="+20 100 000 0000"></label>
+  <label>Email (optional)<input name="email" type="email" value="${esc(pe.email)}" placeholder="you@email.com"></label>
+  <small>Your phone and email are shown to anyone who scans this tag, so they can reach you.</small>
+  <button class="btn">Save</button>
+  ${pe.name ? '<a data-l class="btn ghost" href="/dashboard">Back</a>' : ''}</form>`;
+  $('#pf').onsubmit = e => {
+    e.preventDefault();
+    const d = Object.fromEntries(new FormData(e.target));
+    busy($('#pf .btn'), async () => { await call('savePet')({ ...d, tagId }); toast('Saved! 🐾'); go('/dashboard'); });
+  };
 }
 
 async function admin() {
@@ -149,6 +189,7 @@ function render() {
   if (p.startsWith('/p/')) return scan(p.split('/')[2]);
   if (p === '/login' || p === '/signup') return authPage(p === '/signup');
   if (p === '/admin') return admin();
+  if (p.startsWith('/pet/')) return petForm(p.split('/')[2]);
   if (p === '/dashboard') return dash();
   landing();
 }
