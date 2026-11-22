@@ -126,7 +126,7 @@ async function admin() {
   $('#g').onsubmit = e => {
     e.preventDefault();
     busy($('#g .btn'), async () => {
-      const { tags } = await call('generateTags')({ count: +e.target.n.value });
+      const { tags } = await call('generateTags')({ count: +e.target.n.value, base: location.origin });
       $('#gen').innerHTML = `<div class="card"><p class="note">Activation codes are shown only once. Download the production sheet before leaving this page.</p>
       <div class="row"><button id="ps">Download production sheet</button><button class="ghost" id="pr">Print labels</button></div>
       <div class="labels">${tags.map((t, i) => `<div class="label"><div id="q${i}"></div><b>${t.tagId}</b></div>`).join('')}</div></div>`;
