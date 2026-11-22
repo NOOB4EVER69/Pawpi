@@ -1,11 +1,16 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword as signIn, createUserWithEmailAndPassword as signUp, signOut, sendPasswordResetEmail as reset, sendEmailVerification as verify } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
 import { getFirestore, collection, query, where, orderBy, limit, getDocs, getDoc, getCountFromServer, doc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
-import { getFunctions, httpsCallable } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-functions.js';
 import { firebaseConfig } from './firebase-config.js';
 
-const app = initializeApp(firebaseConfig), auth = getAuth(app), db = getFirestore(app), fns = getFunctions(app);
-const call = n => async d => (await httpsCallable(fns, n)(d)).data;
+const app = initializeApp(firebaseConfig), auth = getAuth(app), db = getFirestore(app);
+const call = n => async d => {
+  const t = user ? await user.getIdToken() : '';
+  const r = await fetch('/api/fn', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + t }, body: JSON.stringify({ ...d, action: n }) });
+  const j = await r.json().catch(() => ({ error: 'Server error' }));
+  if (!r.ok) throw new Error(j.error || 'Server error');
+  return j;
+};
 const $ = (s, r = document) => r.querySelector(s), main = $('#app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 let user = null, isAdmin = false;
