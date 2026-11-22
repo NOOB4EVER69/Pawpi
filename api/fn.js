@@ -1,9 +1,23 @@
 // Vercel serverless backend (replaces Firebase Cloud Functions, so no Blaze plan needed).
 const admin = require('firebase-admin');
 const crypto = require('crypto');
-if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) });
-const db = admin.firestore();
-const { FieldValue } = admin.firestore;
+let db, FieldValue;
+// Tolerant key loader: copes with stray spaces/line breaks from phone copy-paste.
+function init() {
+  if (db) return;
+  const raw = String(process.env.FIREBASE_SERVICE_ACCOUNT || '').replace(/\\n/g, '\n');
+  if (!raw.trim()) throw fail('FIREBASE_SERVICE_ACCOUNT is empty. Add it in Vercel, then redeploy.', 500);
+  const pick = k => ((raw.match(new RegExp('"' + k + '"\\s*:\\s*"([^"]+)"')) || [])[1] || '').replace(/\s/g, '');
+  const body = ((raw.match(/BEGIN PRIVATE KEY([\s\S]*?)END PRIVATE KEY/) || [])[1] || '').replace(/[^A-Za-z0-9+/=]/g, '');
+  const projectId = pick('project_id'), clientEmail = pick('client_email');
+  if (!projectId || !clientEmail || body.length < 100) throw fail('Key looks incomplete. Paste the whole .json file into FIREBASE_SERVICE_ACCOUNT.', 500);
+  const privateKey = '-----BEGIN PRIVATE KEY-----\n' + body.match(/.{1,64}/g).join('\n') + '\n-----END PRIVATE KEY-----\n';
+  try {
+    if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.cert({ projectId, clientEmail, privateKey }) });
+    db = admin.firestore();
+    FieldValue = admin.firestore.FieldValue;
+  } catch (e) { throw fail('Key rejected: ' + e.message, 500); }
+}
 const ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 const fail = (m, c = 400) => Object.assign(new Error(m), { http: c });
@@ -95,6 +109,7 @@ const actions = {
 
 module.exports = async (req, res) => {
   try {
+    init();
     if (req.method !== 'POST') throw fail('POST only.', 405);
     const b = req.body || {};
     const act = Object.hasOwn(actions, b.action) && actions[b.action];
