@@ -65,7 +65,6 @@ function sheet(html, dir = 'ltr') {
 
 /* ---------- Pet data ---------- */
 const TYPES = { dog: ['Dog', '🐶', '#FFE3D6'], cat: ['Cat', '🐱', '#FFF0C9'], rabbit: ['Rabbit', '🐰', '#F3E2F5'], bird: ['Bird', '🐦', '#D9EEFB'], hamster: ['Hamster', '🐹', '#FDE7C8'], horse: ['Horse', '🐴', '#EBDCCB'], turtle: ['Turtle', '🐢', '#CDEFD6'], fish: ['Fish', '🐠', '#D3F0F0'], other: ['Other', '🐾', '#EBDFCB'] };
-const AR_TYPES = { dog: 'كلب', cat: 'قطة', rabbit: 'أرنب', bird: 'طائر', hamster: 'هامستر', horse: 'حصان', turtle: 'سلحفاة', fish: 'سمكة', other: 'حيوان أليف' };
 const avatar = (s, z = 96, photo = '') => {
   const [, e, c] = TYPES[s] || TYPES.other;
   if (photo) return `<img class="avatar" src="${esc(photo)}" alt="" width="${z}" height="${z}" style="width:${z}px;height:${z}px">`;
@@ -106,7 +105,7 @@ async function resizePhoto(file) {
   } finally { URL.revokeObjectURL(url); }
 }
 
-/* ---------- Finder page text (English / Arabic) ---------- */
+/* ---------- Finder page text ---------- */
 const I18N = {
   en: {
     dir: 'ltr', found: 'If you found me, please contact my owner', lostT: "I'm lost!", lostS: 'Please help me get home.',
@@ -117,17 +116,8 @@ const I18N = {
     sent: 'Sent! The owner has been notified. Thank you', noGeo: 'Location is not available on this device.', geoDeny: 'Location was blocked. You can still send a note.',
     waMsg: n => `Hi! I found ${n}`, demo: 'This is only a demo page.', species: k => TYPES[k][0],
   },
-  ar: {
-    dir: 'rtl', found: 'إذا وجدتني، من فضلك تواصل مع صاحبي', lostT: 'أنا تائه!', lostS: 'ساعدني على العودة إلى البيت.',
-    call: 'اتصل بالمالك', wa: 'واتساب المالك', call2: 'اتصل برقم بديل', mail: 'راسل المالك', report: 'لقد وجدت هذا الحيوان', save: 'حفظ جهة الاتصال',
-    notes: 'معلومات مهمة', breed: 'السلالة', color: 'اللون', age: 'العمر', owner: 'المالك',
-    rt: 'أبلغ المالك', rs: 'شارك مكانك ليصل المالك إلى حيوانه بسرعة.', loc: 'شارك موقعي', locOk: 'تمت إضافة الموقع',
-    msg: 'ملاحظة قصيرة (اختياري)', msgP: 'مثال: هو بأمان معي في المقهى', contact: 'رقم هاتفك (اختياري)', send: 'أرسل إلى المالك',
-    sent: 'تم الإرسال! تم إبلاغ المالك. شكرًا لك', noGeo: 'الموقع غير متاح على هذا الجهاز.', geoDeny: 'تم حظر الموقع. يمكنك إرسال ملاحظة فقط.',
-    waMsg: n => `مرحبًا! وجدت ${n}`, demo: 'هذه صفحة تجريبية فقط.', species: k => AR_TYPES[k],
-  },
 };
-const getLang = () => { try { const l = localStorage.getItem('lang'); if (l) return l; } catch { } return (navigator.language || '').startsWith('ar') ? 'ar' : 'en'; };
+const getLang = () => 'en';
 const vcard = p => `BEGIN:VCARD\nVERSION:3.0\nFN:${(p.ownerName || 'Owner')} (${p.name}'s owner)\nTEL;TYPE=CELL:${p.phone}\n${p.phone2 ? `TEL;TYPE=CELL:${p.phone2}\n` : ''}${p.email ? `EMAIL:${p.email}\n` : ''}END:VCARD`;
 
 // The public pet card. Used by the real scan page, the demo, and the live preview in the editor.
@@ -156,13 +146,11 @@ function finderCard(p, lang = 'en', demo = false) {
     </div>
   </div></div>`;
 }
-const langBar = lang => `<div class="langs"><button class="${lang === 'en' ? 'on' : ''}" data-lang="en">English</button><button class="${lang === 'ar' ? 'on' : ''}" data-lang="ar">العربية</button></div>`;
 
 function showFinder(p, token, demo, tagId) {
   document.body.dataset.page = 'finder';
   const lang = getLang(), L = I18N[lang];
-  main.innerHTML = `<div class="view mid">${langBar(lang)}${finderCard(p, lang, demo)}<p class="powered" style="text-align:center">Pawbi · ${esc(tagId || 'demo')}</p></div>`;
-  main.querySelectorAll('[data-lang]').forEach(b => b.onclick = () => { try { localStorage.setItem('lang', b.dataset.lang); } catch { } showFinder(p, token, demo, tagId); });
+  main.innerHTML = `<div class="view mid">${finderCard(p, lang, demo)}<p class="powered" style="text-align:center">Pawbi · ${esc(tagId || 'demo')}</p></div>`;
   $('#vc').onclick = () => demo ? toast(L.demo, false) : dl(URL.createObjectURL(new Blob([vcard(p)], { type: 'text/vcard' })), p.name + '-owner.vcf');
   $('#rp').onclick = () => reportSheet(token, p, L, demo);
 }
@@ -210,7 +198,6 @@ function landing() {
     ['One-touch contact', 'Finders can call, WhatsApp or email you from your pet’s page.'],
     ['Location sharing', 'A finder can send you their location. You see it on your dashboard.'],
     ['Lost mode', 'One switch turns your pet’s page into an urgent call for help.'],
-    ['English and Arabic', 'Finders read the page in the language they speak.'],
   ];
   const faqs = [
     ['Does the person who finds my pet need an app?', 'No. They tap the tag with their phone or scan the QR code, and your pet’s page opens in their browser.'],
@@ -225,12 +212,12 @@ function landing() {
     <p class="lead">Pawbi is a tag for your pet’s collar. Anyone can tap or scan it, see who to call, and send you their location.</p>
     <div class="row"><a data-l class="btn" href="${go1}">${user ? 'Go to dashboard' : 'Get your Pawbi'}</a><a data-l class="btn ghost" href="/demo">See an example</a></div>
     <div class="peek" aria-hidden="true">${finderCard(DEMO, 'en', true)}</div></section>
-  <section class="block"><h2>How it works</h2><ol class="steps">
+  <section class="sec"><h2>How it works</h2><ol class="steps">
     <li><b>Activate your tag</b><span class="muted">Tap the tag with your phone, log in, and enter the code from the packaging.</span></li>
     <li><b>Add your pet</b><span class="muted">Add a photo, your phone number and anything a finder should know.</span></li>
     <li><b>Put it on the collar</b><span class="muted">If your pet goes missing, whoever finds them can reach you right away.</span></li></ol></section>
-  <section class="block"><h2>What finders can do</h2><ul class="feats">${feats.map(([t, p]) => `<li><b>${t}</b><span class="muted">${p}</span></li>`).join('')}</ul></section>
-  <section class="block"><h2>Questions</h2>${faqs.map(([q, a]) => `<details><summary>${q}</summary><div class="ans">${a}</div></details>`).join('')}</section>
+  <section class="sec"><h2>What finders can do</h2><ul class="feats">${feats.map(([t, p]) => `<li><b>${t}</b><span class="muted">${p}</span></li>`).join('')}</ul></section>
+  <section class="sec"><h2>Questions</h2>${faqs.map(([q, a]) => `<details><summary>${q}</summary><div class="ans">${a}</div></details>`).join('')}</section>
   <footer class="foot">Pawbi, made for pets and the people who love them.</footer></div>`;
 }
 
