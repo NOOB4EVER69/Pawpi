@@ -1,7 +1,9 @@
 // Vercel serverless backend (replaces Firebase Cloud Functions, so no Blaze plan needed).
+// Put this file at  api/fn.js  in your repo.
 const admin = require('firebase-admin');
 const crypto = require('crypto');
 let db, FieldValue;
+
 // Tolerant key loader: copes with stray spaces/line breaks from phone copy-paste.
 function init() {
   if (db) return;
@@ -18,16 +20,27 @@ function init() {
     FieldValue = admin.firestore.FieldValue;
   } catch (e) { throw fail('Key rejected: ' + e.message, 500); }
 }
+
 const SPECIES = ['dog', 'cat', 'rabbit', 'bird', 'hamster', 'horse', 'turtle', 'fish', 'other'];
 const ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const PHONE_RE = /^\+\d{7,15}$/;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PHOTO_RE = /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/;
 
 const fail = (m, c = 400) => Object.assign(new Error(m), { http: c });
 const norm = c => String(c).toUpperCase().replace(/[^A-Z0-9]/g, '');
 const hash = (p, c) => crypto.createHmac('sha256', p).update(norm(c)).digest('hex');
+const text = (v, max, label) => {
+  const s = String(v ?? '').replace(/\s+/g, ' ').trim();
+  if (s.length > max) throw fail(label + ' is too long (max ' + max + ' characters).');
+  return s;
+};
+const cleanPhone = v => String(v || '').replace(/[\s().-]/g, '');
 const newCode = () => {
   const s = Array.from({ length: 10 }, () => ALPHA[crypto.randomInt(ALPHA.length)]).join('');
   return s.slice(0, 5) + '-' + s.slice(5);
 };
+
 // Hashing key lives in Firestore (meta/pepper, no client access); created on first use.
 const getPepper = async () => {
   const ref = db.doc('meta/pepper');
@@ -38,8 +51,25 @@ const getPepper = async () => {
 const needAdmin = async uid => {
   if (!uid || !(await db.doc('admins/' + uid).get()).exists) throw fail('Admins only.', 403);
 };
+// Simple fixed-window limiter. Returns true when the caller is over the limit.
+const limited = async (key, max, windowMs) => {
+  const ref = db.doc('rateLimits/' + key), now = Date.now();
+  const s = await ref.get();
+  let r = s.exists ? s.data() : { n: 0, t: now };
+  if (now - r.t > windowMs) r = { n: 0, t: now };
+  if (r.n >= max) return true;
+  await ref.set({ n: r.n + 1, t: r.t });
+  return false;
+};
+const ownTag = async (tagId, uid) => {
+  if (typeof tagId !== 'string' || tagId.length > 20) throw fail('tagId required.');
+  const ref = db.doc('tags/' + tagId), s = await ref.get();
+  if (!s.exists || s.data().ownerId !== uid || s.data().status !== 'claimed') throw fail('That tag is not yours.', 403);
+  return { ref, data: s.data() };
+};
 
 const actions = {
+  // ---------- admin ----------
   async generateTags(d, uid, base) {
     await needAdmin(uid);
     const n = Math.floor(Number(d.count));
@@ -57,7 +87,7 @@ const actions = {
       const tagId = 'PWB-' + String(start + i).padStart(6, '0');
       const token = crypto.randomBytes(8).toString('base64url');
       const code = newCode();
-      batch.set(db.doc('tags/' + tagId), { tagId, token, status: 'unclaimed', ownerId: null, petId: null, createdAt: FieldValue.serverTimestamp(), claimedAt: null });
+      batch.set(db.doc('tags/' + tagId), { tagId, token, status: 'unclaimed', ownerId: null, petId: null, scans: 0, createdAt: FieldValue.serverTimestamp(), claimedAt: null });
       batch.set(db.doc('tagSecrets/' + tagId), { activationCodeHash: hash(pepper, code) });
       tags.push({ tagId, url: base + '/p/' + token, code });
     }
@@ -65,20 +95,77 @@ const actions = {
     return { tags }; // plaintext codes leave the server only here, once
   },
 
-  async getTagStatus(d) {
+  async revokeTag(d, uid) {
+    await needAdmin(uid);
+    if (typeof d.tagId !== 'string') throw fail('tagId required.');
+    await db.doc('tags/' + d.tagId).update({ status: 'revoked' });
+    return { ok: true };
+  },
+
+  // Undo a revoke: back to claimed if it had an owner, otherwise back to unclaimed.
+  async restoreTag(d, uid) {
+    await needAdmin(uid);
+    if (typeof d.tagId !== 'string') throw fail('tagId required.');
+    const ref = db.doc('tags/' + d.tagId), s = await ref.get();
+    if (!s.exists) throw fail('Tag not found.', 404);
+    if (s.data().status !== 'revoked') throw fail('That tag is not revoked.');
+    await ref.update({ status: s.data().ownerId ? 'claimed' : 'unclaimed' });
+    return { ok: true };
+  },
+
+  // ---------- public (finder) ----------
+  async getTagStatus(d, uid) {
     const t = d.token;
     if (typeof t !== 'string' || t.length > 32) throw fail('Bad token.');
     const s = await db.collection('tags').where('token', '==', t).limit(1).get();
     if (s.empty) return null;
-    const x = s.docs[0].data();
+    const doc = s.docs[0], x = doc.data();
     const out = { tagId: x.tagId, status: x.status };
     if (x.status === 'claimed' && x.petId) {
       const p = await db.doc('pets/' + x.petId).get();
-      if (p.exists) { const { name, species, phone, email } = p.data(); out.pet = { name, species, phone, email }; }
+      if (p.exists) {
+        const v = p.data();
+        out.pet = {
+          name: v.name, species: v.species, phone: v.phone, phone2: v.phone2 || '', email: v.email || '',
+          ownerName: v.ownerName || '', breed: v.breed || '', color: v.color || '', age: v.age || '',
+          notes: v.notes || '', photo: v.photo || '', lost: !!v.lost, lostMessage: v.lostMessage || '',
+        };
+      }
+      // Count scans by other people (not the owner checking their own tag).
+      if (x.ownerId !== uid) {
+        await doc.ref.update({ scans: FieldValue.increment(1), lastScanAt: FieldValue.serverTimestamp() }).catch(() => { });
+      }
     }
     return out; // owner ID is never exposed
   },
 
+  // Finder taps "I found this pet": saves an optional location + note for the owner.
+  async reportFound(d, uid, base, ip) {
+    const token = d.token;
+    if (typeof token !== 'string' || token.length > 32) throw fail('Bad token.');
+    const key = 'f_' + crypto.createHash('sha256').update(ip + '|' + token).digest('hex').slice(0, 28);
+    if (await limited(key, 5, 60 * 60 * 1000)) throw fail('Too many reports from this device. Please call the owner instead.', 429);
+    const s = await db.collection('tags').where('token', '==', token).limit(1).get();
+    if (s.empty) throw fail('Tag not found.', 404);
+    const x = s.docs[0].data();
+    if (x.status !== 'claimed' || !x.petId) throw fail('This tag is not active.');
+    let lat = null, lng = null;
+    if (d.lat != null && d.lng != null) {
+      lat = Number(d.lat); lng = Number(d.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) throw fail('Bad location.');
+      lat = Math.round(lat * 1e5) / 1e5; lng = Math.round(lng * 1e5) / 1e5;
+    }
+    const message = text(d.message, 300, 'Message'), contact = text(d.contact, 60, 'Contact');
+    if (lat == null && !message && !contact) throw fail('Share your location or write a short note.');
+    const pet = await db.doc('pets/' + x.petId).get();
+    await db.collection('foundReports').add({
+      tagId: x.tagId, petId: x.petId, ownerId: x.ownerId, petName: pet.exists ? pet.data().name : '',
+      lat, lng, message, contact, read: false, createdAt: FieldValue.serverTimestamp(),
+    });
+    return { ok: true };
+  },
+
+  // ---------- owner ----------
   async claimTag(d, uid) {
     if (!uid) throw fail('Sign in first.', 401);
     const { token, code } = d;
@@ -107,29 +194,56 @@ const actions = {
 
   async savePet(d, uid) {
     if (!uid) throw fail('Sign in first.', 401);
-    const name = String(d.name || '').trim(), email = String(d.email || '').trim();
-    const phone = String(d.phone || '').replace(/[\s().-]/g, '');
-    if (!name || name.length > 40) throw fail('Pet name is required (max 40 characters).');
+    const name = text(d.name, 40, 'Pet name');
+    if (!name) throw fail('Pet name is required (max 40 characters).');
     if (!SPECIES.includes(d.species)) throw fail('Pick an animal type.');
-    if (!/^\+\d{7,15}$/.test(phone)) throw fail('Phone must include the country code, like +201001234567.');
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw fail('That email looks wrong.');
-    if (typeof d.tagId !== 'string') throw fail('tagId required.');
-    const tagRef = db.doc('tags/' + d.tagId);
+    const phone = cleanPhone(d.phone), phone2 = cleanPhone(d.phone2), email = String(d.email || '').trim();
+    if (!PHONE_RE.test(phone)) throw fail('Phone must include the country code, like +201001234567.');
+    if (phone2 && !PHONE_RE.test(phone2)) throw fail('The backup phone must include the country code, like +201001234567.');
+    if (email && !EMAIL_RE.test(email)) throw fail('That email looks wrong.');
+    const data = {
+      name, species: d.species, phone, phone2, email,
+      ownerName: text(d.ownerName, 40, 'Your name'),
+      breed: text(d.breed, 40, 'Breed'), color: text(d.color, 40, 'Color'), age: text(d.age, 20, 'Age'),
+      notes: String(d.notes ?? '').trim().slice(0, 300),
+    };
+    if (d.photo !== undefined) {
+      const p = String(d.photo || '');
+      if (p && (!PHOTO_RE.test(p) || p.length > 200000)) throw fail('That photo is too big. Try a smaller one.');
+      data.photo = p;
+    }
+    const { ref: tagRef } = await ownTag(d.tagId, uid);
     return db.runTransaction(async tx => {
       const t = await tx.get(tagRef);
       if (!t.exists || t.data().ownerId !== uid || t.data().status !== 'claimed') throw fail('That tag is not yours.', 403);
       const petId = t.data().petId || db.collection('pets').doc().id;
       const ref = db.doc('pets/' + petId), old = await tx.get(ref);
-      tx.set(ref, { petId, ownerId: uid, tagId: d.tagId, name, species: d.species, phone, email, updatedAt: FieldValue.serverTimestamp(), ...(old.exists ? {} : { createdAt: FieldValue.serverTimestamp() }) }, { merge: true });
+      tx.set(ref, { ...data, petId, ownerId: uid, tagId: d.tagId, updatedAt: FieldValue.serverTimestamp(), ...(old.exists ? {} : { createdAt: FieldValue.serverTimestamp(), lost: false }) }, { merge: true });
       if (!t.data().petId) tx.update(tagRef, { petId });
       return { ok: true };
     });
   },
 
-  async revokeTag(d, uid) {
-    await needAdmin(uid);
-    if (typeof d.tagId !== 'string') throw fail('tagId required.');
-    await db.doc('tags/' + d.tagId).update({ status: 'revoked' });
+  async setLost(d, uid) {
+    if (!uid) throw fail('Sign in first.', 401);
+    const { data } = await ownTag(d.tagId, uid);
+    if (!data.petId) throw fail('Set up your pet first.');
+    const lost = !!d.lost;
+    await db.doc('pets/' + data.petId).update({
+      lost, lostMessage: lost ? text(d.message, 200, 'Message') : '',
+      lostAt: lost ? FieldValue.serverTimestamp() : null, updatedAt: FieldValue.serverTimestamp(),
+    });
+    return { ok: true };
+  },
+
+  async markReportsRead(d, uid) {
+    if (!uid) throw fail('Sign in first.', 401);
+    const s = await db.collection('foundReports').where('ownerId', '==', uid).where('read', '==', false).limit(200).get();
+    if (!s.empty) {
+      const batch = db.batch();
+      s.docs.forEach(r => batch.update(r.ref, { read: true }));
+      await batch.commit();
+    }
     return { ok: true };
   },
 };
@@ -145,7 +259,8 @@ module.exports = async (req, res) => {
     const t = (req.headers.authorization || '').replace(/^Bearer /, '');
     if (t) { try { uid = (await admin.auth().verifyIdToken(t)).uid; } catch { } }
     const base = 'https://' + String(req.headers['x-forwarded-host'] || req.headers.host).replace(/[^\w.:-]/g, '');
-    res.status(200).json(await act(b, uid, base));
+    const ip = String(req.headers['x-forwarded-for'] || (req.socket && req.socket.remoteAddress) || 'unknown').split(',')[0].trim();
+    res.status(200).json(await act(b, uid, base, ip));
   } catch (e) {
     console.error(e);
     res.status(e.http || 500).json({ error: e.http ? e.message : 'Server error. Check the Vercel logs.' });
