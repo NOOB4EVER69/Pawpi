@@ -135,9 +135,10 @@ function finderCard(p, lang = 'en', demo = false) {
   const L = I18N[lang], tel = n => demo ? 'href="#" data-demo' : `href="tel:${esc(n)}"`;
   const chips = [[L.breed, p.breed], [L.color, p.color], [L.age, p.age]].filter(c => c[1]).map(([k, v]) => `<span class="pill">${k}: ${esc(v)}</span>`).join('');
   const wa = demo ? 'href="#" data-demo' : `href="https://wa.me/${esc(String(p.phone).replace(/\D/g, ''))}?text=${encodeURIComponent(L.waMsg(p.name))}" target="_blank" rel="noopener"`;
-  const foundBtn = `<button type="button" class="btn dark block" id="rp">${L.report}</button>`;
+  const foundBtn = `<button type="button" class="btn dark block" id="rp">📍 ${L.report}</button>`;
   return `<div class="pawcard" dir="${L.dir}">
-  ${p.lost ? `<div class="lostbar" role="alert"><b>${L.lostT}</b>${esc(p.lostMessage) || L.lostS}</div>` : ''}
+  ${p.lost ? `<div class="lostbar" role="alert"><b>🚨 ${L.lostT}</b>${esc(p.lostMessage) || L.lostS}</div>` : ''}
+  <div class="cover" style="background:${(TYPES[p.species] || TYPES.other)[2]}"></div>
   <div class="body">${avatar(p.species, 128, p.photo)}
     <h1>${esc(p.name)}</h1>
     <div class="chips"><span class="pill">${esc(L.species(TYPES[p.species] ? p.species : 'other'))}</span>${chips}</div>
@@ -146,8 +147,8 @@ function finderCard(p, lang = 'en', demo = false) {
     <p>${L.found}</p>
     <div class="acts">
       ${p.lost ? foundBtn : ''}
-      <a class="btn" ${tel(p.phone)}>${L.call}</a>
-      <a class="btn wa" ${wa}>${L.wa}</a>
+      <a class="btn" ${tel(p.phone)}>📞 ${L.call}</a>
+      <a class="btn wa" ${wa}>💬 ${L.wa}</a>
       ${p.phone2 ? `<a class="btn ghost" ${tel(p.phone2)}>${L.call2}</a>` : ''}
       ${p.email ? `<a class="btn ghost" ${demo ? 'href="#" data-demo' : `href="mailto:${esc(p.email)}"`}>${L.mail}</a>` : ''}
       ${p.lost ? '' : foundBtn}
@@ -195,7 +196,7 @@ function reportSheet(token, p, L, demo) {
 /* ---------- Nav ---------- */
 function nav() {
   const b = (h, t, c = 'ghost') => `<a data-l class="btn ${c} sm" href="${h}">${t}</a>`;
-  $('#nav').innerHTML = `<a data-l href="/" class="brand">Pawbi</a>${!known ? '' : `<nav>${user
+  $('#nav').innerHTML = `<a data-l href="/" class="brand"><i>🐾</i>Pawbi</a>${!known ? '' : `<nav>${user
     ? (isAdmin ? b('/admin', 'Admin') : '') + b('/dashboard', 'Dashboard') + b('/settings', 'Settings')
     : b('/login', 'Log in') + b('/signup', 'Sign up', '')}</nav>`}`;
 }
@@ -220,9 +221,10 @@ function landing() {
   ];
   const go1 = user ? '/dashboard' : '/signup';
   main.innerHTML = `<div class="view">
-  <section class="hero"><h1>Every paw deserves a way home.</h1>
+  <section class="hero"><div class="tag">Smart NFC tags for pets</div><h1>Every paw deserves a way home.</h1>
     <p class="lead">Pawbi is a tag for your pet’s collar. Anyone can tap or scan it, see who to call, and send you their location.</p>
-    <div class="row"><a data-l class="btn" href="${go1}">${user ? 'Go to dashboard' : 'Get your Pawbi'}</a><a data-l class="btn ghost" href="/demo">See an example</a></div></section>
+    <div class="row"><a data-l class="btn" href="${go1}">${user ? 'Go to dashboard' : 'Get your Pawbi'}</a><a data-l class="btn ghost" href="/demo">See an example</a></div>
+    <div class="peek" aria-hidden="true">${finderCard(DEMO, 'en', true)}</div></section>
   <section class="block"><h2>How it works</h2><ol class="steps">
     <li><b>Activate your tag</b><span class="muted">Tap the tag with your phone, log in, and enter the code from the packaging.</span></li>
     <li><b>Add your pet</b><span class="muted">Add a photo, your phone number and anything a finder should know.</span></li>
@@ -234,7 +236,7 @@ function landing() {
 
 /* ---------- Auth ---------- */
 function authPage(signup) {
-  main.innerHTML = `<div class="view authwrap"><form class="card narrow" id="f"><h2>${signup ? 'Create your account' : 'Welcome back'}</h2>
+  main.innerHTML = `<div class="view authwrap"><form class="card narrow" id="f"><div class="face">${signup ? '🐕' : '🐈'}</div><h2>${signup ? 'Create your account' : 'Welcome back'}</h2>
   <p class="muted" style="text-align:center">${signup ? 'It takes less than a minute.' : 'Log in to manage your pets.'}</p>
   ${signup ? '<label>Your name<input name="name" placeholder="Sara" required minlength="2" autocomplete="name"></label>' : ''}
   <label>Email<input name="email" type="email" placeholder="you@email.com" required autocomplete="email"></label>
@@ -269,17 +271,17 @@ function authPage(signup) {
 /* ---------- Scan page (public) ---------- */
 async function scan(token) {
   const my = ++rid;
-  main.innerHTML = '<div class="load"></div>';
+  main.innerHTML = '<div class="load">🐾</div>';
   let t = null;
   try { t = await call('getTagStatus')({ token }); } catch { }
   if (my !== rid) return;
-  const msg = (e, h, p) => main.innerHTML = `<div class="view card narrow empty"><h2>${h}</h2><p class="muted">${p}</p><a data-l class="btn ghost" href="/">Go to Pawbi</a></div>`;
+  const msg = (e, h, p) => main.innerHTML = `<div class="view card narrow empty"><div class="big-emoji">${e}</div><h2>${h}</h2><p class="muted">${p}</p><a data-l class="btn ghost" href="/">Go to Pawbi</a></div>`;
   if (!t) return msg('', 'Tag not found', 'This link doesn’t match a Pawbi tag.');
   if (t.status === 'revoked') return msg('', 'Tag deactivated', 'This Pawbi tag is no longer in use.');
   if (t.status === 'claimed') return t.pet ? showFinder(t.pet, token, false, t.tagId) : msg('', 'This Pawbi tag is active', 'Its owner is still setting up the pet profile.');
   await startAuth(); if (my !== rid) return;
   if (!user) sessionStorage.setItem('next', location.pathname);
-  main.innerHTML = `<div class="view card narrow"><div class="authwrap" style="min-height:0"></div><h2 style="text-align:center">Your pet’s new identity starts here</h2><p class="muted" style="text-align:center">Let’s connect this tag to your furry friend.</p>
+  main.innerHTML = `<div class="view card narrow"><div class="face">🎁</div><h2 style="text-align:center">Your pet’s new identity starts here</h2><p class="muted" style="text-align:center">Let’s connect this tag to your furry friend.</p>
   <div style="text-align:center"><span class="pill">${esc(t.tagId)}</span></div>
   ${user ? '<form id="c" class="stack"><label>Activation code<input name="code" placeholder="XXXXX-XXXXX" required autocomplete="off" autocapitalize="characters" maxlength="11" style="text-align:center;letter-spacing:.14em;font-weight:800"></label><span class="hint">You’ll find it on the packaging.</span><button class="btn">Activate tag</button></form>'
       : '<div class="stack"><a data-l class="btn" href="/signup">Create account</a><a data-l class="btn ghost" href="/login">I already have an account</a></div>'}</div>`;
@@ -317,7 +319,7 @@ async function dash() {
   const reports = rSnap.docs.map(d => d.data()).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
   const unread = reports.filter(r => r.read === false).length, scans = tags.reduce((s, t) => s + (t.scans || 0), 0), lostN = Object.values(pets).filter(p => p.lost).length;
   main.innerHTML = `<div class="view stack" style="gap:20px">
-  <div class="dh"><h2>Hey, ${esc(u.name || 'friend')}</h2><p class="muted">${tags.length ? 'Here’s how your pets are doing.' : 'Let’s get your first tag set up.'}</p></div>
+  <div class="dh"><h2>Hey, ${esc(u.name || 'friend')} 👋</h2><p class="muted">${tags.length ? 'Here’s how your pets are doing.' : 'Let’s get your first tag set up.'}</p></div>
   ${user.emailVerified ? '' : '<div class="note warn row between"><span>Please verify your email. We sent a link when you signed up.</span><button class="btn sm ghost" id="rv">Resend</button></div>'}
   ${tags.length ? `<div class="grid stats">
     <div class="card stat"><small>Pets</small><b class="big" data-count="${tags.length}">0</b></div>
@@ -328,13 +330,13 @@ async function dash() {
   <h3>Your pets</h3>
   <div class="grid stagger">${tags.map((t, i) => {
     const p = pets[t.tagId];
-    return `<div class="card pcard ${p?.lost ? 'is-lost' : ''}" style="--i:${i}"><div class="inner">${avatar(p ? p.species : 'other', 88, p?.photo)}<h3>${p ? esc(p.name) : 'New tag'}</h3>
+    return `<div class="card pcard ${p?.lost ? 'is-lost' : ''}" style="--i:${i}"><div class="cover" style="background:${TYPES[p ? p.species : 'other']?.[2] || TYPES.other[2]}"></div><div class="inner">${avatar(p ? p.species : 'other', 88, p?.photo)}<h3>${p ? esc(p.name) : 'New tag'}</h3>
     <div class="row" style="justify-content:center"><span class="pill ok">${esc(t.tagId)}</span>${p?.lost ? '<span class="pill bad">Lost mode</span>' : ''}</div>
     <div class="meta"><span>${t.scans || 0} scan${t.scans === 1 ? '' : 's'}</span>${t.lastScanAt ? `<span>Last: ${ago(t.lastScanAt)}</span>` : ''}</div>
     ${p ? `<label class="lostrow" for="l${i}"><span>Mark as lost</span><span class="sw"><input type="checkbox" id="l${i}" data-lost="${esc(t.tagId)}" ${p.lost ? 'checked' : ''}><span></span></span></label>` : ''}
     <div class="btns"><a data-l class="btn ${p ? 'soft' : ''} ${p ? '' : 'full'}" href="/pet/${esc(t.tagId)}">${p ? 'Edit' : 'Set up pet'}</a>
     ${p ? `<a class="btn soft" href="/p/${esc(t.token)}" target="_blank">View</a><button class="btn ghost sm" data-qr="${esc(t.tagId)}" data-tok="${esc(t.token)}">QR code</button><button class="btn ghost sm" data-cp="${esc(t.token)}">Copy link</button>` : ''}</div></div></div>`;
-  }).join('') || `<div class="card empty" style="grid-column:1/-1"><h3>No tags yet</h3><p class="muted">Tap your Pawbi tag with your phone, or scan the QR code on the packaging, to activate it.</p></div>`}</div></div>`;
+  }).join('') || `<div class="card empty" style="grid-column:1/-1"><div class="big-emoji">🐶</div><h3>No tags yet</h3><p class="muted">Tap your Pawbi tag with your phone, or scan the QR code on the packaging, to activate it.</p></div>`}</div></div>`;
   countUps();
   $('#rv')?.addEventListener('click', e => busy(e.target, async () => { await verify(user); toast('Verification email sent.'); }));
   if (unread) call('markReportsRead')({}).catch(() => { });
@@ -370,7 +372,7 @@ async function dash() {
 async function petForm(tagId) {
   if (!user) { sessionStorage.setItem('next', location.pathname); return go('/login'); }
   const my = ++rid;
-  main.innerHTML = '<div class="load"></div>';
+  main.innerHTML = '<div class="load">🐾</div>';
   const [pets, uSnap] = await Promise.all([myPets(), getDoc(doc(db, 'users', user.uid))]);
   if (my !== rid) return;
   const u = uSnap.data() || {}, pe = pets[tagId] || {}, isNew = !pe.name, sel = pe.species || 'dog';
@@ -444,7 +446,7 @@ async function settings() {
 
 /* ---------- Admin ---------- */
 async function admin() {
-  if (!isAdmin) return main.innerHTML = '<div class="view card narrow empty"><h2>Admins only</h2></div>';
+  if (!isAdmin) return main.innerHTML = '<div class="view card narrow empty"><div class="big-emoji">🔒</div><h2>Admins only</h2></div>';
   const my = ++rid;
   main.innerHTML = `<div class="view stack" style="gap:18px"><h2>Admin</h2><div class="grid stats" id="st">${'<div class="sk" style="min-height:92px"></div>'.repeat(8)}</div>
   <form id="g" class="card"><h3>Generate tags</h3><div class="row"><label style="flex:0 0 120px">How many<input name="n" type="number" min="1" max="200" value="1"></label><button class="btn" style="align-self:flex-end">Generate</button></div></form>
@@ -506,7 +508,7 @@ function render() {
   const priv = f => guard(async () => { await startAuth(); return f(); });
   const guard = f => Promise.resolve().then(f).catch(e => {
     console.error(e);
-    main.innerHTML = '<div class="view card narrow empty"><h2>Something went wrong</h2><p class="muted">Check your connection and try again.</p><button class="btn" onclick="location.reload()">Reload</button></div>';
+    main.innerHTML = '<div class="view card narrow empty"><div class="big-emoji">😿</div><h2>Something went wrong</h2><p class="muted">Check your connection and try again.</p><button class="btn" onclick="location.reload()">Reload</button></div>';
   });
   if (p === '/') { rid++; return landing(); }
   if (p === '/demo') { rid++; return showFinder(DEMO, '', true, 'demo'); }
@@ -517,7 +519,7 @@ function render() {
   if (p === '/settings') return priv(settings);
   if (p === '/admin') return priv(admin);
   rid++;
-  main.innerHTML = '<div class="view card narrow empty"><h2>Page not found</h2><p class="muted">This page wandered off.</p><a data-l class="btn" href="/">Back home</a></div>';
+  main.innerHTML = '<div class="view card narrow empty"><div class="big-emoji">🐾</div><h2>Page not found</h2><p class="muted">This page wandered off.</p><a data-l class="btn" href="/">Back home</a></div>';
 }
 
 /* ---------- Global events ---------- */
