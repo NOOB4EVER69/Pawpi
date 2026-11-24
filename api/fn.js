@@ -2,6 +2,7 @@
 // Put this file at  api/fn.js  in your repo.
 const admin = require('firebase-admin');
 const crypto = require('crypto');
+const webpush = require('web-push');
 let db, FieldValue;
 
 // Tolerant key loader: copes with stray spaces/line breaks from phone copy-paste.
@@ -61,6 +62,25 @@ const limited = async (key, max, windowMs) => {
   await ref.set({ n: r.n + 1, t: r.t });
   return false;
 };
+// Send a push notification to every device the owner has turned alerts on for.
+// Never throws: a failed push must not fail the finder's report.
+const notifyOwner = async (ownerId, payload, base) => {
+  try {
+    const pub = String(process.env.VAPID_PUBLIC || '').trim(), priv = String(process.env.VAPID_PRIVATE || '').trim();
+    if (!pub || !priv || !ownerId) return;
+    webpush.setVapidDetails(base, pub, priv);
+    const s = await db.collection('pushSubs').where('ownerId', '==', ownerId).limit(10).get();
+    const body = JSON.stringify(payload);
+    await Promise.all(s.docs.map(d => {
+      const v = d.data();
+      return webpush.sendNotification({ endpoint: v.endpoint, keys: v.keys }, body, { TTL: 86400, urgency: 'high' })
+        .catch(e => {
+          if (e.statusCode === 404 || e.statusCode === 410) return d.ref.delete(); // device unsubscribed
+          console.error('push failed', e.statusCode, e.body);
+        });
+    }));
+  } catch (e) { console.error('notifyOwner', e); }
+};
 const ownTag = async (tagId, uid) => {
   if (typeof tagId !== 'string' || tagId.length > 20) throw fail('tagId required.');
   const ref = db.doc('tags/' + tagId), s = await ref.get();
@@ -88,11 +108,21 @@ const actions = {
       const token = crypto.randomBytes(8).toString('base64url');
       const code = newCode();
       batch.set(db.doc('tags/' + tagId), { tagId, token, status: 'unclaimed', ownerId: null, petId: null, scans: 0, createdAt: FieldValue.serverTimestamp(), claimedAt: null });
-      batch.set(db.doc('tagSecrets/' + tagId), { activationCodeHash: hash(pepper, code) });
+      // The plain code is kept (server-only, admins can read it) until the tag is claimed, then deleted.
+      batch.set(db.doc('tagSecrets/' + tagId), { activationCodeHash: hash(pepper, code), activationCode: code });
       tags.push({ tagId, url: base + '/p/' + token, code });
     }
     await batch.commit();
-    return { tags }; // plaintext codes leave the server only here, once
+    return { tags };
+  },
+
+  // Admin only: activation codes of tags that are still unclaimed.
+  async getTagCodes(d, uid) {
+    await needAdmin(uid);
+    const s = await db.collection('tagSecrets').limit(2000).get();
+    const codes = {};
+    s.docs.forEach(x => { const c = x.data().activationCode; if (c) codes[x.id] = c; });
+    return { codes };
   },
 
   async revokeTag(d, uid) {
@@ -158,10 +188,21 @@ const actions = {
     const message = text(d.message, 300, 'Message'), contact = text(d.contact, 60, 'Contact');
     if (lat == null && !message && !contact) throw fail('Share your location or write a short note.');
     const pet = await db.doc('pets/' + x.petId).get();
+    const petName = pet.exists ? pet.data().name : '';
     await db.collection('foundReports').add({
-      tagId: x.tagId, petId: x.petId, ownerId: x.ownerId, petName: pet.exists ? pet.data().name : '',
+      tagId: x.tagId, petId: x.petId, ownerId: x.ownerId, petName,
       lat, lng, message, contact, read: false, createdAt: FieldValue.serverTimestamp(),
     });
+    const lost = pet.exists && !!pet.data().lost;
+    const bits = [];
+    if (message) bits.push(message);
+    if (lat != null) bits.push('📍 Location shared');
+    if (contact) bits.push('📞 ' + contact);
+    await notifyOwner(x.ownerId, {
+      title: (lost ? '🚨 ' : '🐾 ') + 'Someone found ' + (petName || 'your pet'),
+      body: bits.join(' · ').slice(0, 180) || 'Open Pawbi to see the details.',
+      url: '/dashboard', tag: 'found-' + x.tagId, urgent: lost,
+    }, base);
     return { ok: true };
   },
 
@@ -187,6 +228,7 @@ const actions = {
       const a = Buffer.from(hash(pepper, code)), b = Buffer.from(sec.data().activationCodeHash);
       if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return bad('That activation code is not right.');
       tx.update(tag.ref, { status: 'claimed', ownerId: uid, claimedAt: FieldValue.serverTimestamp() });
+      tx.update(sec.ref, { activationCode: FieldValue.delete() }); // plain code no longer needed
       tx.set(rl, { n: 0, t: now });
       return { ok: true, tagId: tag.id };
     });
@@ -236,6 +278,39 @@ const actions = {
     return { ok: true };
   },
 
+  // ---------- push notifications ----------
+  async pushKey() {
+    const k = String(process.env.VAPID_PUBLIC || '').trim();
+    if (!k) throw fail('Alerts are not set up on the server yet.', 503);
+    return { key: k };
+  },
+
+  async savePush(d, uid) {
+    if (!uid) throw fail('Sign in first.', 401);
+    const s = d.sub;
+    if (!s || typeof s.endpoint !== 'string' || !/^https:\/\//.test(s.endpoint) || s.endpoint.length > 1000
+      || !s.keys || typeof s.keys.p256dh !== 'string' || typeof s.keys.auth !== 'string'
+      || s.keys.p256dh.length > 200 || s.keys.auth.length > 100) throw fail('Bad subscription.');
+    const id = crypto.createHash('sha256').update(s.endpoint).digest('hex').slice(0, 40);
+    const ref = db.doc('pushSubs/' + id);
+    if (!(await ref.get()).exists) {
+      const n = (await db.collection('pushSubs').where('ownerId', '==', uid).limit(10).get()).size;
+      if (n >= 10) throw fail('Too many devices have alerts on. Turn them off on one first.');
+    }
+    // Keyed by endpoint: if someone else logs in on this device, it now belongs to them.
+    await ref.set({ ownerId: uid, endpoint: s.endpoint, keys: { p256dh: s.keys.p256dh, auth: s.keys.auth }, updatedAt: FieldValue.serverTimestamp() });
+    return { ok: true };
+  },
+
+  async removePush(d, uid) {
+    if (!uid) throw fail('Sign in first.', 401);
+    if (typeof d.endpoint !== 'string' || d.endpoint.length > 1000) throw fail('Bad endpoint.');
+    const ref = db.doc('pushSubs/' + crypto.createHash('sha256').update(d.endpoint).digest('hex').slice(0, 40));
+    const s = await ref.get();
+    if (s.exists && s.data().ownerId === uid) await ref.delete();
+    return { ok: true };
+  },
+
   async markReportsRead(d, uid) {
     if (!uid) throw fail('Sign in first.', 401);
     const s = await db.collection('foundReports').where('ownerId', '==', uid).where('read', '==', false).limit(200).get();
@@ -266,3 +341,4 @@ module.exports = async (req, res) => {
     res.status(e.http || 500).json({ error: e.http ? e.message : 'Server error. Check the Vercel logs.' });
   }
 };
+          
