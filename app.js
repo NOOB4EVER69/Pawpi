@@ -41,7 +41,7 @@ const qr = (el, text, size) => new QRCode(el, { text, width: size, height: size 
 let qrP;
 const loadQR = () => qrP ||= new Promise((ok, no) => { const e = document.createElement('script'); e.src = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js'; e.onload = ok; e.onerror = no; document.head.append(e); });
 const qrPng = async (url, id) => { await loadQR(); const d = document.createElement('div'); qr(d, url, 512); setTimeout(() => dl(d.querySelector('canvas').toDataURL(), id + '.png'), 60); };
-const copy = async text => { try { await navigator.clipboard.writeText(text); toast('Link copied.'); } catch { toast('Could not copy. Long-press the link instead.', false); } };
+const copy = async (text, msg = 'Link copied.') => { try { await navigator.clipboard.writeText(text); toast(msg); } catch { toast('Could not copy. Long-press the text instead.', false); } };
 const ago = ts => {
   const d = ts?.toDate ? ts.toDate() : null; if (!d) return '';
   const s = (Date.now() - d) / 1000;
@@ -61,6 +61,74 @@ function sheet(html, dir = 'ltr') {
   document.body.append(o);
   o.querySelector('input,textarea,button')?.focus({ preventScroll: true });
   return { el: o, close };
+}
+
+/* ---------- Install app + push alerts ---------- */
+const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const standalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const pushOK = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+let deferredInstall = null;
+const canInstall = () => !standalone() && (!!deferredInstall || isIOS);
+const b64 = s => { const r = atob((s + '='.repeat((4 - s.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(r, c => c.charCodeAt(0)); };
+const swReady = () => Promise.race([navigator.serviceWorker.ready, new Promise((_, no) => setTimeout(() => no(new Error('Service worker not ready.')), 4000))]);
+
+async function installApp() {
+  if (deferredInstall) {
+    const p = deferredInstall; deferredInstall = null;
+    p.prompt(); await p.userChoice.catch(() => { }); nav(); return;
+  }
+  const s = sheet(`<h2>Install Pawbi</h2><p class="muted">On iPhone and iPad it takes three taps:</p>
+  <ol class="steps"><li><b>Tap Share</b><span class="muted">The square with an arrow, at the bottom of Safari.</span></li>
+  <li><b>Add to Home Screen</b><span class="muted">Scroll down the list and tap it.</span></li>
+  <li><b>Tap Add</b><span class="muted">Then open Pawbi from your Home Screen and turn on alerts.</span></li></ol>
+  <button type="button" class="btn block" id="ok">Got it</button>`);
+  $('#ok', s.el).onclick = s.close;
+}
+
+async function enablePush() {
+  if (Notification.permission === 'denied') throw new Error('Notifications are blocked for this site. Allow them in your browser or phone settings, then try again.');
+  const perm = await Notification.requestPermission(); // must run straight from the tap
+  if (perm !== 'granted') throw new Error('Notifications were not allowed.');
+  const reg = await swReady();
+  const { key } = await call('pushKey')({});
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64(key) });
+  await call('savePush')({ sub: sub.toJSON() });
+}
+async function disablePush() {
+  const sub = await (await swReady()).pushManager.getSubscription();
+  if (sub) { await call('removePush')({ endpoint: sub.endpoint }).catch(() => { }); await sub.unsubscribe(); }
+}
+// Quietly re-link this device to the logged-in account (covers new logins and rotated subscriptions).
+async function syncPush() {
+  try {
+    if (!user || !pushOK() || Notification.permission !== 'granted') return;
+    const sub = await (await swReady()).pushManager.getSubscription();
+    if (sub) await call('savePush')({ sub: sub.toJSON() });
+  } catch { }
+}
+// On log out, stop this device receiving the account's alerts (the phone keeps its permission).
+const forgetPush = async () => {
+  try { const sub = await (await swReady()).pushManager.getSubscription(); if (sub) await call('removePush')({ endpoint: sub.endpoint }); } catch { }
+};
+
+const notifyCard = () => '<div id="nc"></div>';
+async function fillNotify() {
+  if (!$('#nc')) return;
+  let sub = null, html;
+  const needIosInstall = isIOS && !standalone();
+  if (pushOK() && !needIosInstall) { try { sub = await (await swReady()).pushManager.getSubscription(); } catch { } }
+  const el = $('#nc'); if (!el) return;
+  const row = (t, h, btn) => `<div class="card"><div class="row between"><div style="flex:1;min-width:200px"><b>${t}</b><div class="hint">${h}</div></div>${btn}</div></div>`;
+  if (needIosInstall) html = row('🔔 Get alerts on your iPhone', 'Add Pawbi to your Home Screen first, then open it from there and turn on alerts.', '<button type="button" class="btn sm" id="ni">How to install</button>');
+  else if (!pushOK()) html = row('🔔 Alerts', 'This browser can’t show notifications. Try Chrome or Safari.', '');
+  else if (Notification.permission === 'denied') html = row('🔔 Alerts are blocked', 'Allow notifications for Pawbi in your browser or phone settings, then reload.', '');
+  else if (sub && Notification.permission === 'granted') html = row('🔔 Alerts are on', 'This device gets a notification the moment someone finds your pet.', '<button type="button" class="btn ghost sm" id="nf">Turn off</button>');
+  else html = row('🔔 Get alerts when your pet is found', 'We’ll notify this device when someone shares a location or note. Works even if you don’t install the app.', '<button type="button" class="btn sm" id="nn">Turn on alerts</button>');
+  el.innerHTML = html;
+  $('#ni', el)?.addEventListener('click', installApp);
+  $('#nn', el)?.addEventListener('click', e => busy(e.currentTarget, async () => { await enablePush(); toast('Alerts are on.'); await fillNotify(); }));
+  $('#nf', el)?.addEventListener('click', e => busy(e.currentTarget, async () => { await disablePush(); toast('Alerts are off.'); await fillNotify(); }));
 }
 
 /* ---------- Pet data ---------- */
@@ -184,9 +252,11 @@ function reportSheet(token, p, L, demo) {
 /* ---------- Nav ---------- */
 function nav() {
   const b = (h, t, c = 'ghost') => `<a data-l class="btn ${c} sm" href="${h}">${t}</a>`;
-  $('#nav').innerHTML = `<a data-l href="/" class="brand"><i>🐾</i>Pawbi</a>${!known ? '' : `<nav>${user
+  const inst = canInstall() ? '<button type="button" class="btn ghost sm" id="inst">⬇ Install</button>' : '';
+  $('#nav').innerHTML = `<a data-l href="/" class="brand"><i>🐾</i>Pawbi</a>${!known && !inst ? '' : `<nav>${inst}${!known ? '' : user
     ? (isAdmin ? b('/admin', 'Admin') : '') + b('/dashboard', 'Dashboard') + b('/settings', 'Settings')
     : b('/login', 'Log in') + b('/signup', 'Sign up', '')}</nav>`}`;
+  $('#inst')?.addEventListener('click', installApp);
 }
 
 /* ---------- Landing ---------- */
@@ -198,6 +268,7 @@ function landing() {
     ['One-touch contact', 'Finders can call, WhatsApp or email you from your pet’s page.'],
     ['Location sharing', 'A finder can send you their location. You see it on your dashboard.'],
     ['Lost mode', 'One switch turns your pet’s page into an urgent call for help.'],
+    ['Instant alerts', 'Your phone gets a notification the moment someone finds your pet. Install Pawbi as an app, or just allow alerts in your browser.'],
   ];
   const faqs = [
     ['Does the person who finds my pet need an app?', 'No. They tap the tag with their phone or scan the QR code, and your pet’s page opens in their browser.'],
@@ -308,6 +379,7 @@ async function dash() {
   main.innerHTML = `<div class="view stack" style="gap:20px">
   <div class="dh"><h2>Hey, ${esc(u.name || 'friend')} 👋</h2><p class="muted">${tags.length ? 'Here’s how your pets are doing.' : 'Let’s get your first tag set up.'}</p></div>
   ${user.emailVerified ? '' : '<div class="note warn row between"><span>Please verify your email. We sent a link when you signed up.</span><button class="btn sm ghost" id="rv">Resend</button></div>'}
+  ${notifyCard()}
   ${tags.length ? `<div class="grid stats">
     <div class="card stat"><small>Pets</small><b class="big" data-count="${tags.length}">0</b></div>
     <div class="card stat"><small>Tag scans</small><b class="big" data-count="${scans}">0</b></div>
@@ -324,7 +396,7 @@ async function dash() {
     <div class="btns"><a data-l class="btn ${p ? 'soft' : ''} ${p ? '' : 'full'}" href="/pet/${esc(t.tagId)}">${p ? 'Edit' : 'Set up pet'}</a>
     ${p ? `<a class="btn soft" href="/p/${esc(t.token)}" target="_blank">View</a><button class="btn ghost sm" data-qr="${esc(t.tagId)}" data-tok="${esc(t.token)}">QR code</button><button class="btn ghost sm" data-cp="${esc(t.token)}">Copy link</button>` : ''}</div></div></div>`;
   }).join('') || `<div class="card empty" style="grid-column:1/-1"><div class="big-emoji">🐶</div><h3>No tags yet</h3><p class="muted">Tap your Pawbi tag with your phone, or scan the QR code on the packaging, to activate it.</p></div>`}</div></div>`;
-  countUps();
+  countUps(); fillNotify();
   $('#rv')?.addEventListener('click', e => busy(e.target, async () => { await verify(user); toast('Verification email sent.'); }));
   if (unread) call('markReportsRead')({}).catch(() => { });
   main.onclick = e => {
@@ -418,9 +490,11 @@ async function settings() {
   <form id="sf" class="card"><label>Name<input name="name" required minlength="2" maxlength="60" value="${esc(u.name)}"></label>
   <label>Phone (used to pre-fill new pets)${phoneField('phone', u.phone)}</label>
   <label>Email<input value="${esc(user.email)}" disabled></label><button class="btn">Save changes</button></form>
+  <h3>Alerts</h3>${notifyCard()}
   <div class="card"><h3>Security</h3><button class="btn ghost" id="pw">Email me a password reset link</button>
   ${user.emailVerified ? '<span class="pill ok">Email verified</span>' : '<button class="btn ghost" id="rv">Resend verification email</button>'}</div>
   <button class="btn dark" id="lo">Log out</button></div>`;
+  fillNotify();
   $('#sf').onsubmit = e => {
     e.preventDefault();
     const f = Object.fromEntries(new FormData(e.target));
@@ -428,7 +502,7 @@ async function settings() {
   };
   $('#pw').onclick = e => busy(e.currentTarget, async () => { await reset(auth, user.email); toast('Reset link sent. Check your inbox.'); });
   $('#rv')?.addEventListener('click', e => busy(e.currentTarget, async () => { await verify(user); toast('Verification email sent.'); }));
-  $('#lo').onclick = () => signOut(auth).then(() => go('/'));
+  $('#lo').onclick = e => busy(e.currentTarget, async () => { await forgetPush(); await signOut(auth); go('/'); });
 }
 
 /* ---------- Admin ---------- */
@@ -440,13 +514,13 @@ async function admin() {
   <div id="gen"></div>
   <div class="row between"><h3>All tags</h3><button class="btn ghost sm" id="ex">Export CSV</button></div>
   <input id="q" placeholder="Search by tag ID…"><div class="chipbar" id="cb">${['all', 'unclaimed', 'claimed', 'revoked'].map(s => `<button class="${s === 'all' ? 'on' : ''}" data-s="${s}">${s[0].toUpperCase() + s.slice(1)}</button>`).join('')}</div>
-  <div class="wrap"><table><thead><tr><th>Tag</th><th>Status</th><th>Scans</th><th>Created</th><th></th></tr></thead><tbody id="tb"></tbody></table></div></div>`;
-  let rows = [], filter = 'all';
+  <div class="wrap"><table><thead><tr><th>Tag</th><th>Status</th><th>Code</th><th>Scans</th><th>Created</th><th></th></tr></thead><tbody id="tb"></tbody></table></div></div>`;
+  let rows = [], filter = 'all', codes = {};
   const cnt = async (c, ...w) => (await getCountFromServer(query(collection(db, c), ...w))).data().count;
   const draw = () => {
     const q = $('#q').value.toLowerCase();
-    $('#tb').innerHTML = rows.filter(r => (filter === 'all' || r.status === filter) && r.tagId.toLowerCase().includes(q)).map(r => `<tr><td><b>${esc(r.tagId)}</b></td><td><span class="pill ${r.status === 'claimed' ? 'ok' : r.status === 'revoked' ? 'bad' : ''}">${esc(r.status)}</span></td><td>${r.scans || 0}</td><td>${r.createdAt?.toDate().toLocaleDateString() || ''}</td>
-      <td><button class="btn ghost sm" data-qr="${esc(r.tagId)}">QR</button> <button class="btn ghost sm" data-cp="${esc(r.token)}">Copy link</button> ${r.status === 'revoked' ? `<button class="btn ghost sm" data-rs="${esc(r.tagId)}">Restore</button>` : `<button class="btn ghost sm" data-rv="${esc(r.tagId)}">Revoke</button>`}</td></tr>`).join('') || '<tr><td colspan="5">No tags match. Generate a batch above.</td></tr>';
+    $('#tb').innerHTML = rows.filter(r => (filter === 'all' || r.status === filter) && r.tagId.toLowerCase().includes(q)).map(r => `<tr><td><b>${esc(r.tagId)}</b></td><td><span class="pill ${r.status === 'claimed' ? 'ok' : r.status === 'revoked' ? 'bad' : ''}">${esc(r.status)}</span></td><td>${codes[r.tagId] ? `<code>${esc(codes[r.tagId])}</code>` : '—'}</td><td>${r.scans || 0}</td><td>${r.createdAt?.toDate().toLocaleDateString() || ''}</td>
+      <td><button class="btn ghost sm" data-qr="${esc(r.tagId)}">QR</button> <button class="btn ghost sm" data-cp="${esc(r.token)}">Copy link</button> ${codes[r.tagId] ? `<button class="btn ghost sm" data-cc="${esc(r.tagId)}">Copy code</button> ` : ''}${r.status === 'revoked' ? `<button class="btn ghost sm" data-rs="${esc(r.tagId)}">Restore</button>` : `<button class="btn ghost sm" data-rv="${esc(r.tagId)}">Revoke</button>`}</td></tr>`).join('') || '<tr><td colspan="6">No tags match. Generate a batch above.</td></tr>';
   };
   const refresh = async () => {
     const T = s => cnt('tags', where('status', '==', s));
@@ -454,6 +528,8 @@ async function admin() {
     const snap = await getDocs(query(collection(db, 'tags'), orderBy('createdAt', 'desc'), limit(500)));
     if (my !== rid) return;
     rows = snap.docs.map(d => d.data());
+    codes = (await call('getTagCodes')({}).catch(() => ({}))).codes || {};
+    if (my !== rid) return;
     const scans = rows.reduce((s, r) => s + (r.scans || 0), 0);
     $('#st').innerHTML = [['Total tags', total], ['Unclaimed', un], ['Claimed', cl], ['Revoked', rv], ['Pets', pets], ['Customers', users], ['Scans', scans], ['Found alerts', fr]].map(([k, v]) => `<div class="card stat"><small>${k}</small><b class="big" data-count="${v}">0</b></div>`).join('');
     countUps(); draw();
@@ -466,6 +542,7 @@ async function admin() {
     const b = e.target.closest('button'); if (!b) return;
     if (b.dataset.qr) { const r = rows.find(x => x.tagId === b.dataset.qr); qrPng(location.origin + '/p/' + r.token, r.tagId); }
     if (b.dataset.cp) copy(location.origin + '/p/' + b.dataset.cp);
+    if (b.dataset.cc) copy(codes[b.dataset.cc], 'Code copied.');
     if (b.dataset.rv && confirm('Revoke ' + b.dataset.rv + '? Its link will stop working.')) busy(b, async () => { await call('revokeTag')({ tagId: b.dataset.rv }); toast('Tag revoked.'); await refresh(); });
     if (b.dataset.rs) busy(b, async () => { await call('restoreTag')({ tagId: b.dataset.rs }); toast('Tag restored.'); await refresh(); });
   };
@@ -473,12 +550,23 @@ async function admin() {
     e.preventDefault();
     busy($('#g .btn'), async () => {
       const { tags } = await call('generateTags')({ count: +e.target.n.value, base: location.origin });
-      $('#gen').innerHTML = `<div class="card"><p class="note warn">Activation codes are shown only once. Download the production sheet before leaving this page.</p>
-      <div class="row"><button class="btn" id="ps">Download production sheet</button><button class="btn ghost" id="pr">Print labels</button></div>
-      <div class="labels">${tags.map((t, i) => `<div class="label"><div id="q${i}"></div><b>${t.tagId}</b></div>`).join('')}</div></div>`;
+      $('#gen').innerHTML = `<div class="card"><p class="note">Done. You can find these links and codes again in the table below until the tag is activated.</p>
+      <div class="gens">${tags.map((t, i) => `<div class="gen"><b>${esc(t.tagId)}</b>
+        <div class="kv"><small>Link</small><code>${esc(t.url)}</code></div>
+        <div class="kv"><small>Activation code</small><code>${esc(t.code)}</code></div>
+        <div class="row"><button class="btn sm" data-gl="${i}">Copy link</button><button class="btn sm soft" data-gc="${i}">Copy code</button><button class="btn sm ghost" data-gb="${i}">Copy both</button></div></div>`).join('')}</div>
+      <div class="row"><button class="btn ghost" id="pr">Print QR labels</button></div>
+      <div class="labels">${tags.map((t, i) => `<div class="label"><div id="q${i}"></div><b>${esc(t.tagId)}</b></div>`).join('')}</div></div>`;
+      $('#gen').onclick = e => {
+        const b = e.target.closest('button'); if (!b) return;
+        const t = tags[b.dataset.gl ?? b.dataset.gc ?? b.dataset.gb];
+        if (!t) return;
+        if (b.dataset.gl != null) copy(t.url, 'Link copied.');
+        if (b.dataset.gc != null) copy(t.code, 'Code copied.');
+        if (b.dataset.gb != null) copy('Link: ' + t.url + '\nActivation code: ' + t.code, 'Link and code copied.');
+      };
       await loadQR();
       tags.forEach((t, i) => qr($('#q' + i), t.url, 96));
-      $('#ps').onclick = () => csv('pawbi-production-sheet.csv', [['Tag ID', 'NFC URL', 'Activation code'], ...tags.map(t => [t.tagId, t.url, t.code])]);
       $('#pr').onclick = () => print();
       toast(`Generated ${tags.length} tag${tags.length > 1 ? 's' : ''}.`);
       await refresh();
@@ -522,11 +610,15 @@ document.addEventListener('click', e => {
   }
 });
 addEventListener('popstate', render);
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; nav(); });
+addEventListener('appinstalled', () => { deferredInstall = null; nav(); toast('Pawbi installed!'); });
+if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => { }));
 let known = false, first = true, authP;
 const startAuth = () => authP ||= load().then(() => new Promise(ok => onAuthStateChanged(auth, async u => {
   user = u; isAdmin = false;
   if (u) { try { isAdmin = (await getDoc(doc(db, 'admins', u.uid))).exists(); } catch { } }
   known = true; nav();
+  if (u) syncPush();
   if (first) { first = false; ok(); if (user && location.pathname === '/') render(); } else render();
 })));
 nav(); render();

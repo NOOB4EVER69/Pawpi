@@ -16,7 +16,8 @@ small,.muted,.hint{color:var(--muted)}
 /* layout */
 .top,main{width:100%;max-width:860px;margin:0 auto}
 .top{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 16px;min-height:60px}
-.top nav{display:flex;gap:6px}
+.top{flex-wrap:wrap}
+.top nav{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
 .brand{display:flex;align-items:center;gap:8px;font-weight:600;font-size:24px;text-decoration:none}
 .brand i{font-style:normal;display:grid;place-items:center;width:34px;height:34px;border-radius:11px;background:var(--accent);font-size:18px}
 main{flex:1;display:flex;flex-direction:column;padding:8px 16px 40px}
@@ -144,6 +145,11 @@ th{font-size:13px;color:var(--muted)}
 .chipbar{display:flex;gap:8px;flex-wrap:wrap}
 .chipbar button{min-height:36px;padding:4px 14px;font-size:14px;background:var(--soft);color:var(--ink)}
 .chipbar button.on{background:var(--ink);color:#fff}
+.gens{display:grid;gap:10px}
+.gen{border:1px solid var(--line);border-radius:var(--r);padding:12px;display:flex;flex-direction:column;gap:8px;background:var(--bg)}
+.kv{display:flex;flex-direction:column;gap:2px}
+.kv code{font:600 14px ui-monospace,Menlo,monospace;word-break:break-all;background:#fff;border:1px solid var(--line);border-radius:8px;padding:6px 8px;user-select:all}
+td code{font:700 14px ui-monospace,Menlo,monospace;letter-spacing:.06em;user-select:all}
 .labels{display:flex;flex-wrap:wrap;gap:12px}
 .label{display:flex;flex-direction:column;align-items:center;border:1px dashed var(--line);padding:8px;border-radius:var(--r);background:#fff;color:#000}
 
