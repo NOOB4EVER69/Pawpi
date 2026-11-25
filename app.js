@@ -252,7 +252,7 @@ function showFinder(p, token, demo, tagId) {
   document.body.dataset.page = 'finder';
   if (!demo) meta(`${p.name}: contact the owner | Pawbi`, `${p.name} has a Pawbi tag. Call or message the owner, or share where you found this pet.`, false);
   const lang = getLang(), L = I18N[lang];
-  main.innerHTML = `<div class="view mid">${finderCard(p, lang, demo)}<p class="powered" style="text-align:center">Pawbi · ${esc(tagId || 'demo')} · <a href="/privacy">Privacy</a></p></div>`;
+  main.innerHTML = `<div class="view mid">${finderCard(p, lang, demo)}<p class="powered" style="text-align:center">Pawbi · ${esc(tagId || 'demo')}</p></div>`;
   $('#vc').onclick = () => demo ? toast(L.demo, false) : dl(URL.createObjectURL(new Blob([vcard(p)], { type: 'text/vcard' })), p.name + '-owner.vcf');
   $('#rp').onclick = () => reportSheet(token, p, L, demo);
 }
@@ -323,7 +323,7 @@ function landing() {
     <li><b>Put it on the collar</b><span class="muted">If your pet goes missing, whoever finds them can reach you right away.</span></li></ol></section>
   <section class="sec"><h2>What finders can do</h2><ul class="feats">${feats.map(([t, p]) => `<li><b>${t}</b><span class="muted">${p}</span></li>`).join('')}</ul></section>
   <section class="sec"><h2>Questions</h2>${faqs.map(([q, a]) => `<details><summary>${q}</summary><div class="ans">${a}</div></details>`).join('')}</section>
-  <footer class="foot">Pawbi, made for pets and the people who love them.<br><a href="/privacy">Privacy policy</a></footer></div>`;
+  <footer class="foot">Pawbi, made for pets and the people who love them.</footer></div>`;
 }
 
 /* ---------- Auth ---------- */
@@ -334,7 +334,6 @@ function authPage(signup) {
   <label>Email<input name="email" type="email" placeholder="you@email.com" required autocomplete="email"></label>
   <label>Password<div class="pw"><input name="pw" type="password" placeholder="8+ characters" required minlength="8" autocomplete="${signup ? 'new-password' : 'current-password'}"><button type="button" class="ghost" id="sp">Show</button></div></label>
   <button class="btn">${signup ? 'Create account' : 'Log in'}</button>
-  ${signup ? '<a class="link" href="/privacy">How we handle your data</a>' : ''}
   ${signup ? '' : '<a href="#" class="link" id="fp">Forgot password?</a>'}
   <a data-l class="link" href="${signup ? '/login' : '/signup'}">${signup ? 'Have an account? Log in' : 'New here? Create an account'}</a></form></div>`;
   $('#sp').onclick = e => { const i = $('[name=pw]'); i.type = i.type === 'password' ? 'text' : 'password'; e.target.textContent = i.type === 'password' ? 'Show' : 'Hide'; };
@@ -567,7 +566,7 @@ async function settings() {
   <h3>Alerts</h3>${notifyCard()}
   <div class="card"><h3>Security</h3><button class="btn ghost" id="pw">Email me a password reset link</button>
   ${user.emailVerified ? '<span class="pill ok">Email verified</span>' : '<button class="btn ghost" id="rv">Resend verification email</button>'}</div>
-  <button class="btn dark" id="lo">Log out</button><a class="link" href="/privacy">Privacy policy</a></div>`;
+  <button class="btn dark" id="lo">Log out</button></div>`;
   fillNotify();
   $('#sf').onsubmit = e => {
     e.preventDefault();

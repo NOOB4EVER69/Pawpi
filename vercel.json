@@ -1,5 +1,4 @@
 {
-  "cleanUrls": true,
   "rewrites": [
     { "source": "/(demo|login|signup|dashboard|settings|admin)", "destination": "/index.html" },
     { "source": "/p/:token", "destination": "/index.html" },
