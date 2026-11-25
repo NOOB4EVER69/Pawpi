@@ -42,6 +42,21 @@ let qrP;
 const loadQR = () => qrP ||= new Promise((ok, no) => { const e = document.createElement('script'); e.src = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js'; e.onload = ok; e.onerror = no; document.head.append(e); });
 const qrPng = async (url, id) => { await loadQR(); const d = document.createElement('div'); qr(d, url, 512); setTimeout(() => dl(d.querySelector('canvas').toDataURL(), id + '.png'), 60); };
 const copy = async (text, msg = 'Link copied.') => { try { await navigator.clipboard.writeText(text); toast(msg); } catch { toast('Could not copy. Long-press the text instead.', false); } };
+// The app is a single page, so each view sets its own title, description and search-engine tags.
+function meta(title, desc, index = true) {
+  document.title = title;
+  const tag = (attr, key, val) => {
+    let e = document.head.querySelector(`meta[${attr}="${key}"]`);
+    if (!e) { e = document.createElement('meta'); e.setAttribute(attr, key); document.head.append(e); }
+    e.setAttribute('content', val);
+  };
+  tag('name', 'description', desc); tag('property', 'og:title', title); tag('property', 'og:description', desc);
+  tag('name', 'robots', index ? 'index,follow' : 'noindex,nofollow');
+  let c = document.head.querySelector('link[rel="canonical"]');
+  if (!index) { if (c) c.remove(); return; }
+  if (!c) { c = document.createElement('link'); c.rel = 'canonical'; document.head.append(c); }
+  c.href = location.origin + (location.pathname.replace(/\/+$/, '') || '/');
+}
 const ago = ts => {
   const d = ts?.toDate ? ts.toDate() : null; if (!d) return '';
   const s = (Date.now() - d) / 1000;
@@ -112,6 +127,7 @@ const forgetPush = async () => {
   try { const sub = await (await swReady()).pushManager.getSubscription(); if (sub) await call('removePush')({ endpoint: sub.endpoint }); } catch { }
 };
 
+const clearTray = async () => { try { (await (await swReady()).getNotifications()).forEach(n => n.close()); } catch { } };
 const notifyCard = () => '<div id="nc"></div>';
 async function fillNotify() {
   if (!$('#nc')) return;
@@ -138,6 +154,14 @@ const avatar = (s, z = 96, photo = '') => {
   if (photo) return `<img class="avatar" src="${esc(photo)}" alt="" width="${z}" height="${z}" style="width:${z}px;height:${z}px">`;
   return `<div class="avatar" style="width:${z}px;height:${z}px;font-size:${Math.round(z * .55)}px;background:${c}">${e}</div>`;
 };
+
+const THEMES = { peach: '#FFD9C7', sun: '#FFE7A3', mint: '#CDEFD6', sky: '#D9EEFB', lilac: '#EADCF8', rose: '#FBD3DC', sand: '#EBDFCB' };
+const TRAITS = {
+  friendly: ['😊', 'Friendly'], shy: ['🙈', 'Shy'], playful: ['🎾', 'Playful'], calm: ['😌', 'Calm'], energetic: ['⚡', 'Energetic'], kids: ['👧', 'Good with kids'],
+  pets: ['🐕', 'Good with other pets'], loud: ['🔊', 'Afraid of loud noises'], meds: ['💊', 'Needs medication'], diet: ['🍽️', 'Special diet'], neutered: ['✂️', 'Neutered or spayed'], cautious: ['⚠️', 'May snap when scared'],
+};
+const SHOW = [['ownerName', 'Show my name'], ['email', 'Show my email'], ['phone2', 'Show backup phone'], ['wa', 'Show WhatsApp button']];
+const coverOf = p => THEMES[p?.theme] || (TYPES[p?.species] || TYPES.other)[2];
 
 const CODES = [['🇪🇬', '+20'], ['🇸🇦', '+966'], ['🇦🇪', '+971'], ['🇰🇼', '+965'], ['🇶🇦', '+974'], ['🇧🇭', '+973'], ['🇴🇲', '+968'], ['🇯🇴', '+962'], ['🇱🇧', '+961'], ['🇮🇶', '+964'], ['🇸🇾', '+963'], ['🇵🇸', '+970'], ['🇸🇩', '+249'], ['🇱🇾', '+218'], ['🇹🇳', '+216'], ['🇩🇿', '+213'], ['🇲🇦', '+212'], ['🇹🇷', '+90'], ['🇬🇧', '+44'], ['🇺🇸', '+1'], ['🇩🇪', '+49'], ['🇫🇷', '+33'], ['🇮🇳', '+91'], ['🇵🇰', '+92']];
 const splitPhone = p => {
@@ -178,7 +202,7 @@ const I18N = {
   en: {
     dir: 'ltr', found: 'If you found me, please contact my owner', lostT: "I'm lost!", lostS: 'Please help me get home.',
     call: 'Call owner', wa: 'WhatsApp owner', call2: 'Call backup number', mail: 'Email owner', report: 'I found this pet', save: 'Save contact',
-    notes: 'Good to know', breed: 'Breed', color: 'Color', age: 'Age', owner: 'Owner',
+    notes: 'Good to know', breed: 'Breed', color: 'Color', age: 'Age', owner: 'Owner', male: 'Male', female: 'Female', chip: 'Microchip', vet: 'Vet',
     rt: 'Tell the owner', rs: 'Share where you are so the owner can reach their pet fast.', loc: 'Share my location', locOk: 'Location added',
     msg: 'Short note (optional)', msgP: 'e.g. Safe with me at the café', contact: 'Your phone number (optional)', send: 'Send to owner',
     sent: 'Sent! The owner has been notified. Thank you', noGeo: 'Location is not available on this device.', geoDeny: 'Location was blocked. You can still send a note.',
@@ -191,22 +215,31 @@ const vcard = p => `BEGIN:VCARD\nVERSION:3.0\nFN:${(p.ownerName || 'Owner')} (${
 // The public pet card. Used by the real scan page, the demo, and the live preview in the editor.
 function finderCard(p, lang = 'en', demo = false) {
   const L = I18N[lang], tel = n => demo ? 'href="#" data-demo' : `href="tel:${esc(n)}"`;
+  const gender = p.gender === 'male' ? '♂ ' + L.male : p.gender === 'female' ? '♀ ' + L.female : '';
   const chips = [[L.breed, p.breed], [L.color, p.color], [L.age, p.age]].filter(c => c[1]).map(([k, v]) => `<span class="pill">${k}: ${esc(v)}</span>`).join('');
+  const traits = (p.traits || []).filter(k => TRAITS[k]).map(k => `<span class="pill t">${TRAITS[k][0]} ${TRAITS[k][1]}</span>`).join('');
+  const rows = [
+    ...(p.microchip ? [[L.chip, esc(p.microchip)]] : []),
+    ...(p.vetName || p.vetPhone ? [[L.vet, [esc(p.vetName), p.vetPhone ? `<a ${tel(p.vetPhone)}>${esc(p.vetPhone)}</a>` : ''].filter(Boolean).join(' · ')]] : []),
+    ...(p.extras || []).filter(x => x && x.k && x.v).map(x => [esc(x.k), esc(x.v)]),
+  ].map(([k, v]) => `<div class="irow"><b>${k}</b>${v}</div>`).join('');
   const wa = demo ? 'href="#" data-demo' : `href="https://wa.me/${esc(String(p.phone).replace(/\D/g, ''))}?text=${encodeURIComponent(L.waMsg(p.name))}" target="_blank" rel="noopener"`;
   const foundBtn = `<button type="button" class="btn dark block" id="rp">📍 ${L.report}</button>`;
   return `<div class="pawcard" dir="${L.dir}">
   ${p.lost ? `<div class="lostbar" role="alert"><b>🚨 ${L.lostT}</b>${esc(p.lostMessage) || L.lostS}</div>` : ''}
-  <div class="cover" style="background:${(TYPES[p.species] || TYPES.other)[2]}"></div>
+  <div class="cover" style="background:${coverOf(p)}"></div>
   <div class="body">${avatar(p.species, 128, p.photo)}
     <h1>${esc(p.name)}</h1>
-    <div class="chips"><span class="pill">${esc(L.species(TYPES[p.species] ? p.species : 'other'))}</span>${chips}</div>
+    <div class="chips"><span class="pill">${esc(L.species(TYPES[p.species] ? p.species : 'other'))}</span>${gender ? `<span class="pill">${gender}</span>` : ''}${chips}</div>
+    ${traits ? `<div class="chips">${traits}</div>` : ''}
     ${p.ownerName ? `<small>${L.owner}: ${esc(p.ownerName)}</small>` : ''}
     ${p.notes ? `<div class="infobox"><b>${L.notes}</b>${esc(p.notes)}</div>` : ''}
+    ${rows ? `<div class="infobox">${rows}</div>` : ''}
     <p>${L.found}</p>
     <div class="acts">
       ${p.lost ? foundBtn : ''}
       <a class="btn" ${tel(p.phone)}>📞 ${L.call}</a>
-      <a class="btn wa" ${wa}>💬 ${L.wa}</a>
+      ${p.noWa ? '' : `<a class="btn wa" ${wa}>💬 ${L.wa}</a>`}
       ${p.phone2 ? `<a class="btn ghost" ${tel(p.phone2)}>${L.call2}</a>` : ''}
       ${p.email ? `<a class="btn ghost" ${demo ? 'href="#" data-demo' : `href="mailto:${esc(p.email)}"`}>${L.mail}</a>` : ''}
       ${p.lost ? '' : foundBtn}
@@ -217,8 +250,9 @@ function finderCard(p, lang = 'en', demo = false) {
 
 function showFinder(p, token, demo, tagId) {
   document.body.dataset.page = 'finder';
+  if (!demo) meta(`${p.name}: contact the owner | Pawbi`, `${p.name} has a Pawbi tag. Call or message the owner, or share where you found this pet.`, false);
   const lang = getLang(), L = I18N[lang];
-  main.innerHTML = `<div class="view mid">${finderCard(p, lang, demo)}<p class="powered" style="text-align:center">Pawbi · ${esc(tagId || 'demo')}</p></div>`;
+  main.innerHTML = `<div class="view mid">${finderCard(p, lang, demo)}<p class="powered" style="text-align:center">Pawbi · ${esc(tagId || 'demo')} · <a href="/privacy">Privacy</a></p></div>`;
   $('#vc').onclick = () => demo ? toast(L.demo, false) : dl(URL.createObjectURL(new Blob([vcard(p)], { type: 'text/vcard' })), p.name + '-owner.vcf');
   $('#rp').onclick = () => reportSheet(token, p, L, demo);
 }
@@ -289,7 +323,7 @@ function landing() {
     <li><b>Put it on the collar</b><span class="muted">If your pet goes missing, whoever finds them can reach you right away.</span></li></ol></section>
   <section class="sec"><h2>What finders can do</h2><ul class="feats">${feats.map(([t, p]) => `<li><b>${t}</b><span class="muted">${p}</span></li>`).join('')}</ul></section>
   <section class="sec"><h2>Questions</h2>${faqs.map(([q, a]) => `<details><summary>${q}</summary><div class="ans">${a}</div></details>`).join('')}</section>
-  <footer class="foot">Pawbi, made for pets and the people who love them.</footer></div>`;
+  <footer class="foot">Pawbi, made for pets and the people who love them.<br><a href="/privacy">Privacy policy</a></footer></div>`;
 }
 
 /* ---------- Auth ---------- */
@@ -300,6 +334,7 @@ function authPage(signup) {
   <label>Email<input name="email" type="email" placeholder="you@email.com" required autocomplete="email"></label>
   <label>Password<div class="pw"><input name="pw" type="password" placeholder="8+ characters" required minlength="8" autocomplete="${signup ? 'new-password' : 'current-password'}"><button type="button" class="ghost" id="sp">Show</button></div></label>
   <button class="btn">${signup ? 'Create account' : 'Log in'}</button>
+  ${signup ? '<a class="link" href="/privacy">How we handle your data</a>' : ''}
   ${signup ? '' : '<a href="#" class="link" id="fp">Forgot password?</a>'}
   <a data-l class="link" href="${signup ? '/login' : '/signup'}">${signup ? 'Have an account? Log in' : 'New here? Create an account'}</a></form></div>`;
   $('#sp').onclick = e => { const i = $('[name=pw]'); i.type = i.type === 'password' ? 'text' : 'password'; e.target.textContent = i.type === 'password' ? 'Show' : 'Hide'; };
@@ -334,10 +369,12 @@ async function scan(token) {
   try { t = await call('getTagStatus')({ token }); } catch { }
   if (my !== rid) return;
   const msg = (e, h, p) => main.innerHTML = `<div class="view card narrow empty"><div class="big-emoji">${e}</div><h2>${h}</h2><p class="muted">${p}</p><a data-l class="btn ghost" href="/">Go to Pawbi</a></div>`;
-  if (!t) return msg('', 'Tag not found', 'This link doesn’t match a Pawbi tag.');
-  if (t.status === 'revoked') return msg('', 'Tag deactivated', 'This Pawbi tag is no longer in use.');
-  if (t.status === 'claimed') return t.pet ? showFinder(t.pet, token, false, t.tagId) : msg('', 'This Pawbi tag is active', 'Its owner is still setting up the pet profile.');
+  const note = (e, h, p) => { meta(h + ' | Pawbi', p, false); return note(e, h, p); };
+  if (!t) return note('', 'Tag not found', 'This link doesn’t match a Pawbi tag.');
+  if (t.status === 'revoked') return note('', 'Tag deactivated', 'This Pawbi tag is no longer in use.');
+  if (t.status === 'claimed') return t.pet ? showFinder(t.pet, token, false, t.tagId) : note('', 'This Pawbi tag is active', 'Its owner is still setting up the pet profile.');
   await startAuth(); if (my !== rid) return;
+  meta('Activate your Pawbi tag | Pawbi', 'Connect this tag to your pet by entering the activation code from the packaging.', false);
   if (!user) sessionStorage.setItem('next', location.pathname);
   main.innerHTML = `<div class="view card narrow"><div class="face">🎁</div><h2 style="text-align:center">Your pet’s new identity starts here</h2><p class="muted" style="text-align:center">Let’s connect this tag to your furry friend.</p>
   <div style="text-align:center"><span class="pill">${esc(t.tagId)}</span></div>
@@ -361,7 +398,7 @@ async function scan(token) {
 const myPets = async () => Object.fromEntries((await getDocs(query(collection(db, 'pets'), where('ownerId', '==', user.uid)))).docs.map(d => [d.data().tagId, d.data()]));
 const reportRow = r => `<div class="report"><div style="flex:1;min-width:0"><b>${esc(r.petName || 'Your pet')}</b> ${r.read === false ? '<span class="pill bad">New</span>' : ''}
   <div class="hint">${ago(r.createdAt)}</div>${r.message ? `<p>${esc(r.message)}</p>` : ''}${r.contact ? `<p><a href="tel:${esc(r.contact)}">${esc(r.contact)}</a></p>` : ''}
-  ${r.lat != null ? `<a class="btn sm soft" style="margin-top:6px" target="_blank" rel="noopener" href="https://www.google.com/maps?q=${Number(r.lat)},${Number(r.lng)}">Open in Maps</a>` : ''}</div></div>`;
+  ${r.lat != null ? `<a class="btn sm soft" style="margin-top:6px" target="_blank" rel="noopener" href="https://www.google.com/maps?q=${Number(r.lat)},${Number(r.lng)}">Open in Maps</a>` : ''}</div><button type="button" class="ghost x" data-dis="${esc(r.id)}" aria-label="Dismiss this alert">✕</button></div>`;
 
 async function dash() {
   if (!user) { sessionStorage.setItem('next', '/dashboard'); return go('/login'); }
@@ -374,7 +411,7 @@ async function dash() {
   if (my !== rid) return;
   const u = uSnap.data() || {};
   const tags = tSnap.docs.map(d => d.data()).sort((a, b) => (b.claimedAt?.seconds || 0) - (a.claimedAt?.seconds || 0));
-  const reports = rSnap.docs.map(d => d.data()).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+  const reports = rSnap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
   const unread = reports.filter(r => r.read === false).length, scans = tags.reduce((s, t) => s + (t.scans || 0), 0), lostN = Object.values(pets).filter(p => p.lost).length;
   main.innerHTML = `<div class="view stack" style="gap:20px">
   <div class="dh"><h2>Hey, ${esc(u.name || 'friend')} 👋</h2><p class="muted">${tags.length ? 'Here’s how your pets are doing.' : 'Let’s get your first tag set up.'}</p></div>
@@ -385,11 +422,11 @@ async function dash() {
     <div class="card stat"><small>Tag scans</small><b class="big" data-count="${scans}">0</b></div>
     <div class="card stat"><small>Found alerts</small><b class="big" data-count="${reports.length}">0</b></div>
     <div class="card stat"><small>In lost mode</small><b class="big" data-count="${lostN}">0</b></div></div>` : ''}
-  ${reports.length ? `<div class="card ${unread ? 'alertcard' : ''}"><div class="row between"><h3>${unread ? `${unread} new found alert${unread > 1 ? 's' : ''}` : 'Found alerts'}</h3></div>${reports.slice(0, 5).map(reportRow).join('')}</div>` : ''}
+  ${reports.length ? `<div class="card ${unread ? 'alertcard' : ''}"><div class="row between"><h3>${unread ? `${unread} new found alert${unread > 1 ? 's' : ''}` : 'Found alerts'}</h3><button type="button" class="btn ghost sm" id="ca">Clear all</button></div>${reports.slice(0, 5).map(reportRow).join('')}</div>` : ''}
   <h3>Your pets</h3>
   <div class="grid stagger">${tags.map((t, i) => {
     const p = pets[t.tagId];
-    return `<div class="card pcard ${p?.lost ? 'is-lost' : ''}" style="--i:${i}"><div class="cover" style="background:${TYPES[p ? p.species : 'other']?.[2] || TYPES.other[2]}"></div><div class="inner">${avatar(p ? p.species : 'other', 88, p?.photo)}<h3>${p ? esc(p.name) : 'New tag'}</h3>
+    return `<div class="card pcard ${p?.lost ? 'is-lost' : ''}" style="--i:${i}"><div class="cover" style="background:${coverOf(p)}"></div><div class="inner">${avatar(p ? p.species : 'other', 88, p?.photo)}<h3>${p ? esc(p.name) : 'New tag'}</h3>
     <div class="row" style="justify-content:center"><span class="pill ok">${esc(t.tagId)}</span>${p?.lost ? '<span class="pill bad">Lost mode</span>' : ''}</div>
     <div class="meta"><span>${t.scans || 0} scan${t.scans === 1 ? '' : 's'}</span>${t.lastScanAt ? `<span>Last: ${ago(t.lastScanAt)}</span>` : ''}</div>
     ${p ? `<label class="lostrow" for="l${i}"><span>Mark as lost</span><span class="sw"><input type="checkbox" id="l${i}" data-lost="${esc(t.tagId)}" ${p.lost ? 'checked' : ''}><span></span></span></label>` : ''}
@@ -403,6 +440,13 @@ async function dash() {
     const b = e.target.closest('button'); if (!b) return;
     if (b.dataset.qr) qrPng(location.origin + '/p/' + b.dataset.tok, b.dataset.qr);
     if (b.dataset.cp) copy(location.origin + '/p/' + b.dataset.cp);
+    if (b.dataset.dis) busy(b, async () => { await call('clearReports')({ id: b.dataset.dis }); toast('Alert removed.'); dash(); });
+    if (b.id === 'ca') {
+      const s = sheet(`<h2>Clear all alerts?</h2><p class="muted">This removes every found alert from your dashboard. Your pets and tags are not affected.</p>
+        <button type="button" class="btn danger block" id="cy">Clear all alerts</button><button type="button" class="btn ghost block" id="cn">Cancel</button>`);
+      $('#cn', s.el).onclick = s.close; $('#cn', s.el).focus();
+      $('#cy', s.el).onclick = e2 => busy(e2.currentTarget, async () => { await call('clearReports')({}); s.close(); clearTray(); toast('All alerts cleared.'); dash(); });
+    }
   };
   main.onchange = e => {
     const sw = e.target.closest('[data-lost]'); if (!sw) return;
@@ -436,47 +480,77 @@ async function petForm(tagId) {
   if (my !== rid) return;
   const u = uSnap.data() || {}, pe = pets[tagId] || {}, isNew = !pe.name, sel = pe.species || 'dog';
   let photo = pe.photo || '', photoChanged = false;
+  const traits = new Set(pe.traits || []), hidden = new Set(pe.hide || []), ex = pe.extras || [], theme = THEMES[pe.theme] ? pe.theme : '';
+  const GENDERS = [['', '❔', 'Not sure'], ['male', '♂', 'Male'], ['female', '♀', 'Female']];
+  meta(isNew ? 'Add your pet | Pawbi' : `Edit ${pe.name} | Pawbi`, 'Choose what finders see when they scan your pet’s tag.', false);
   main.innerHTML = `<div class="view editor"><form id="pf" class="card"><h2>${isNew ? 'Add your pet' : 'Edit your pet'}</h2><div><span class="pill">${esc(tagId)}</span></div>
   <div class="stack" style="align-items:center"><button type="button" class="photo" id="ph" aria-label="Choose a photo"></button><input type="file" id="pi" accept="image/*" hidden>
     <button type="button" class="btn sm ghost" id="pr" ${photo ? '' : 'hidden'}>Remove photo</button></div>
   <label>Pet name<input name="name" required maxlength="40" value="${esc(pe.name)}" placeholder="Luna" autocomplete="off"></label>
   <div><div class="sect" style="margin-bottom:8px">Animal type</div><div class="types">${Object.entries(TYPES).map(([k, [l, e, c]]) => `<label class="type"><input type="radio" name="species" value="${k}" ${k === sel ? 'checked' : ''}><span style="background:${c}">${e}<small>${l}</small></span></label>`).join('')}</div></div>
+  <div><div class="sect" style="margin-bottom:8px">Gender</div><div class="types">${GENDERS.map(([k, e, l]) => `<label class="type"><input type="radio" name="gender" value="${k}" ${k === (pe.gender || '') ? 'checked' : ''}><span>${e}<small>${l}</small></span></label>`).join('')}</div></div>
   <div class="two"><label>Breed<input name="breed" maxlength="40" value="${esc(pe.breed)}" placeholder="Golden retriever"></label><label>Color<input name="color" maxlength="40" value="${esc(pe.color)}" placeholder="Golden"></label></div>
   <label>Age<input name="age" maxlength="20" value="${esc(pe.age)}" placeholder="3 years"></label>
+  <div><div class="sect" style="margin-bottom:8px">Page color</div><div class="swatches" role="radiogroup" aria-label="Page color">
+    <label class="swatch"><input type="radio" name="theme" value="" ${theme ? '' : 'checked'}><span title="Match the animal type">Auto</span></label>
+    ${Object.entries(THEMES).map(([k, c]) => `<label class="swatch"><input type="radio" name="theme" value="${k}" ${k === theme ? 'checked' : ''}><span style="background:${c}" title="${k}"></span></label>`).join('')}</div>
+    <span class="hint">Colors the top of your pet’s page.</span></div>
+  <div><div class="sect" style="margin-bottom:8px">Personality and care</div><div class="tchips">${Object.entries(TRAITS).map(([k, [e, l]]) => `<label class="tchip"><input type="checkbox" name="traits" value="${k}" ${traits.has(k) ? 'checked' : ''}><span>${e} ${l}</span></label>`).join('')}</div></div>
+  <label>Good to know (optional)<textarea name="notes" maxlength="300" placeholder="Medication, allergies, nervous around strangers…">${esc(pe.notes)}</textarea></label>
+  <div class="sect">More details</div>
+  <label>Microchip number (optional)<input name="microchip" maxlength="30" value="${esc(pe.microchip)}" inputmode="numeric" autocomplete="off"></label>
+  <label>Vet name (optional)<input name="vetName" maxlength="60" value="${esc(pe.vetName)}" autocomplete="off"></label>
+  <label>Vet phone (optional)${phoneField('vetPhone', pe.vetPhone)}</label>
+  <div><b style="font-size:14px">Your own details (optional)</b><div class="hint" style="margin-bottom:8px">Add up to 3, like “Favorite treat: Chicken”.</div><div class="stack" style="gap:8px">${[0, 1, 2].map(i => `<div class="two keep"><input name="xk${i}" maxlength="24" aria-label="Label ${i + 1}" value="${esc(ex[i]?.k)}" placeholder="${['Favorite treat', 'Collar color', 'Allergic to'][i]}"><input name="xv${i}" maxlength="60" aria-label="Detail ${i + 1}" value="${esc(ex[i]?.v)}" placeholder="${['Chicken', 'Blue', 'Beef'][i]}"></div>`).join('')}</div></div>
   <div class="sect">How finders reach you</div>
   <label>Your name<input name="ownerName" maxlength="40" value="${esc(pe.ownerName ?? u.name)}" autocomplete="name"></label>
   <label>Phone<span class="hint">Pick your country. You can type the number the way you normally dial it.</span>${phoneField('phone', pe.phone || u.phone, true)}</label>
   <label>Backup phone (optional)${phoneField('phone2', pe.phone2)}</label>
   <label>Email (optional)<input name="email" type="email" value="${esc(pe.email ?? u.email ?? user.email)}" placeholder="you@email.com"></label>
-  <label>Good to know (optional)<textarea name="notes" maxlength="300" placeholder="Medication, allergies, nervous around strangers…">${esc(pe.notes)}</textarea></label>
+  <div class="sect">What finders can see</div>
+  <div class="stack" style="gap:8px">${SHOW.map(([k, l]) => `<label class="lostrow"><span>${l}</span><span class="sw ok"><input type="checkbox" name="show_${k}" ${hidden.has(k) ? '' : 'checked'}><span></span></span></label>`).join('')}</div>
+  <p class="hint">Your main phone number is always shown, so a finder can reach you.</p>
   <p class="hint warn">Everything on this page is shown to anyone who scans the tag.</p>
-  <button class="btn">Save</button>
+  <button type="button" class="btn ghost" id="pv">Preview page</button>
+  <button class="btn" id="sv">Save</button>
   ${isNew ? '' : '<a data-l class="btn ghost" href="/dashboard">Back to dashboard</a>'}</form></div>`;
   const form = $('#pf');
-  const values = () => {
+  const collect = () => {
     const f = Object.fromEntries(new FormData(form));
-    return { name: f.name || 'Your pet', species: f.species, breed: f.breed, color: f.color, age: f.age, ownerName: f.ownerName, notes: f.notes, phone: readPhone(f, 'phone') || '+20000000000', phone2: readPhone(f, 'phone2'), email: f.email, photo, lost: !!pe.lost, lostMessage: pe.lostMessage };
+    return {
+      name: f.name, species: f.species, gender: f.gender || '', theme: f.theme || '', breed: f.breed, color: f.color, age: f.age, notes: f.notes,
+      traits: [...form.querySelectorAll('[name=traits]:checked')].map(x => x.value),
+      microchip: f.microchip, vetName: f.vetName, vetPhone: readPhone(f, 'vetPhone'),
+      extras: [0, 1, 2].map(i => ({ k: (f['xk' + i] || '').trim(), v: (f['xv' + i] || '').trim() })).filter(x => x.k && x.v),
+      ownerName: f.ownerName, phone: readPhone(f, 'phone'), phone2: readPhone(f, 'phone2'), email: f.email,
+      hide: SHOW.map(x => x[0]).filter(k => !f['show_' + k]),
+    };
   };
   const drawPhoto = () => {
     $('#ph').innerHTML = photo ? `<img src="${esc(photo)}" alt="">` : 'Add photo';
     $('#pr').hidden = !photo;
   };
-  const preview = () => {};
-  drawPhoto(); preview();
-  form.addEventListener('input', () => { if (!photo) drawPhoto(); preview(); });
+  drawPhoto();
+  form.addEventListener('input', () => { if (!photo) drawPhoto(); });
   $('#ph').onclick = () => $('#pi').click();
-  $('#pr').onclick = () => { photo = ''; photoChanged = true; drawPhoto(); preview(); };
+  $('#pr').onclick = () => { photo = ''; photoChanged = true; drawPhoto(); };
   $('#pi').onchange = async e => {
     const file = e.target.files[0]; if (!file) return;
-    try { photo = await resizePhoto(file); photoChanged = true; drawPhoto(); preview(); } catch (x) { toast(x.message, false); }
+    try { photo = await resizePhoto(file); photoChanged = true; drawPhoto(); } catch (x) { toast(x.message, false); }
     e.target.value = '';
+  };
+  // Shows the page exactly as a finder would see it (hidden fields left out).
+  $('#pv').onclick = () => {
+    const c = collect(), h = k => c.hide.includes(k);
+    const p = { ...c, name: c.name || 'Your pet', phone: c.phone || '+20000000000', ownerName: h('ownerName') ? '' : c.ownerName, email: h('email') ? '' : c.email, phone2: h('phone2') ? '' : c.phone2, noWa: h('wa'), photo, lost: !!pe.lost, lostMessage: pe.lostMessage };
+    const s = sheet(`${finderCard(p, 'en', true)}<button type="button" class="btn ghost block" id="pc">Close preview</button>`);
+    $('#pc', s.el).onclick = s.close;
   };
   form.onsubmit = e => {
     e.preventDefault();
-    const f = Object.fromEntries(new FormData(form));
-    const payload = { tagId, name: f.name, species: f.species, breed: f.breed, color: f.color, age: f.age, ownerName: f.ownerName, notes: f.notes, email: f.email, phone: readPhone(f, 'phone'), phone2: readPhone(f, 'phone2') };
+    const payload = { tagId, ...collect() };
     if (photoChanged) payload.photo = photo;
-    busy($('#pf .btn'), async () => { await call('savePet')(payload); toast('Saved!'); go('/dashboard'); });
+    busy($('#sv'), async () => { await call('savePet')(payload); toast('Saved!'); go('/dashboard'); });
   };
 }
 
@@ -493,7 +567,7 @@ async function settings() {
   <h3>Alerts</h3>${notifyCard()}
   <div class="card"><h3>Security</h3><button class="btn ghost" id="pw">Email me a password reset link</button>
   ${user.emailVerified ? '<span class="pill ok">Email verified</span>' : '<button class="btn ghost" id="rv">Resend verification email</button>'}</div>
-  <button class="btn dark" id="lo">Log out</button></div>`;
+  <button class="btn dark" id="lo">Log out</button><a class="link" href="/privacy">Privacy policy</a></div>`;
   fillNotify();
   $('#sf').onsubmit = e => {
     e.preventDefault();
@@ -578,6 +652,19 @@ async function admin() {
 function render() {
   const p = location.pathname.replace(/\/+$/, '') || '/', seg = decodeURIComponent(p.split('/')[2] || '');
   window.scrollTo(0, 0);
+  const M = {
+    '/': ['Pawbi: Every Paw Deserves a Way Home', 'Smart NFC pet tags. Anyone can tap or scan your pet’s tag, call you in one touch and share exactly where your pet is. No app needed.'],
+    '/demo': ['Example pet page | Pawbi', 'See what a finder gets when they tap or scan a Pawbi tag: your pet’s photo, one-touch call and WhatsApp, and location sharing.'],
+    '/login': ['Log in | Pawbi', 'Log in to Pawbi to manage your pets, tags, lost mode and found alerts.', false],
+    '/signup': ['Create your account | Pawbi', 'Create a Pawbi account to activate your NFC pet tag and set up your pet’s profile in under a minute.'],
+    '/dashboard': ['Dashboard | Pawbi', 'Your pets, tag scans and found alerts in one place.', false],
+    '/settings': ['Account settings | Pawbi', 'Manage your Pawbi account, phone alerts and password.', false],
+    '/admin': ['Admin | Pawbi', 'Pawbi tag administration.', false],
+  };
+  if (M[p]) meta(...M[p]);
+  else if (p.startsWith('/p/')) meta('Pet tag | Pawbi', 'Contact the owner of this pet.', false);
+  else if (p.startsWith('/pet/')) meta('Your pet’s profile | Pawbi', 'Choose what finders see when they scan your pet’s tag.', false);
+  else meta('Page not found | Pawbi', 'This page could not be found.', false);
   delete document.body.dataset.page;
   main.onclick = main.onchange = null; // views attach their own handlers; drop the previous view's
   const priv = f => guard(async () => { await startAuth(); return f(); });
@@ -594,7 +681,7 @@ function render() {
   if (p === '/settings') return priv(settings);
   if (p === '/admin') return priv(admin);
   rid++;
-  main.innerHTML = '<div class="view card narrow empty"><div class="big-emoji">🐾</div><h2>Page not found</h2><p class="muted">This page wandered off.</p><a data-l class="btn" href="/">Back home</a></div>';
+  main.innerHTML = '<div class="view card narrow empty"><div class="big-emoji">🐾</div><h2>Page not found</h2><p class="muted">This page wandered off. Let’s get it home.</p><a data-l class="btn" href="/">Back home</a></div>';
 }
 
 /* ---------- Global events ---------- */

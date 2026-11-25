@@ -1,0 +1,10 @@
+# Pawbi
+# Public pages (home, example, privacy) can be crawled. Private areas and pet tag pages cannot.
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /admin
+Disallow: /dashboard
+Disallow: /settings
+Disallow: /pet/
+Disallow: /p/
