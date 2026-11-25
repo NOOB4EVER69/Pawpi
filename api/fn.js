@@ -23,6 +23,10 @@ function init() {
 }
 
 const SPECIES = ['dog', 'cat', 'rabbit', 'bird', 'hamster', 'horse', 'turtle', 'fish', 'other'];
+const GENDERS = ['male', 'female'];
+const THEMES = ['peach', 'sun', 'mint', 'sky', 'lilac', 'rose', 'sand'];
+const TRAITS = ['friendly', 'shy', 'playful', 'calm', 'energetic', 'kids', 'pets', 'loud', 'meds', 'diet', 'neutered', 'cautious'];
+const HIDE = ['ownerName', 'email', 'phone2', 'wa']; // fields an owner can hide from the public page
 const ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const PHONE_RE = /^\+\d{7,15}$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -154,11 +158,13 @@ const actions = {
     if (x.status === 'claimed' && x.petId) {
       const p = await db.doc('pets/' + x.petId).get();
       if (p.exists) {
-        const v = p.data();
+        const v = p.data(), hide = new Set(Array.isArray(v.hide) ? v.hide : []);
         out.pet = {
-          name: v.name, species: v.species, phone: v.phone, phone2: v.phone2 || '', email: v.email || '',
-          ownerName: v.ownerName || '', breed: v.breed || '', color: v.color || '', age: v.age || '',
+          name: v.name, species: v.species, phone: v.phone, phone2: hide.has('phone2') ? '' : v.phone2 || '', email: hide.has('email') ? '' : v.email || '',
+          ownerName: hide.has('ownerName') ? '' : v.ownerName || '', breed: v.breed || '', color: v.color || '', age: v.age || '',
           notes: v.notes || '', photo: v.photo || '', lost: !!v.lost, lostMessage: v.lostMessage || '',
+          gender: v.gender || '', theme: v.theme || '', traits: Array.isArray(v.traits) ? v.traits : [], microchip: v.microchip || '',
+          vetName: v.vetName || '', vetPhone: v.vetPhone || '', extras: Array.isArray(v.extras) ? v.extras : [], noWa: hide.has('wa'),
         };
       }
       // Count scans by other people (not the owner checking their own tag).
@@ -243,8 +249,16 @@ const actions = {
     if (!PHONE_RE.test(phone)) throw fail('Phone must include the country code, like +201001234567.');
     if (phone2 && !PHONE_RE.test(phone2)) throw fail('The backup phone must include the country code, like +201001234567.');
     if (email && !EMAIL_RE.test(email)) throw fail('That email looks wrong.');
+    const vetPhone = cleanPhone(d.vetPhone);
+    if (vetPhone && !PHONE_RE.test(vetPhone)) throw fail('The vet phone must include the country code, like +201001234567.');
+    const pick = (v, allowed) => Array.isArray(v) ? [...new Set(v.filter(x => allowed.includes(x)))] : [];
+    const extras = (Array.isArray(d.extras) ? d.extras : []).slice(0, 3)
+      .map(x => ({ k: text(x && x.k, 24, 'Detail label'), v: text(x && x.v, 60, 'Detail') })).filter(x => x.k && x.v);
     const data = {
       name, species: d.species, phone, phone2, email,
+      gender: GENDERS.includes(d.gender) ? d.gender : '', theme: THEMES.includes(d.theme) ? d.theme : '',
+      traits: pick(d.traits, TRAITS), hide: pick(d.hide, HIDE), extras,
+      microchip: text(d.microchip, 30, 'Microchip number'), vetName: text(d.vetName, 60, 'Vet name'), vetPhone,
       ownerName: text(d.ownerName, 40, 'Your name'),
       breed: text(d.breed, 40, 'Breed'), color: text(d.color, 40, 'Color'), age: text(d.age, 20, 'Age'),
       notes: String(d.notes ?? '').trim().slice(0, 300),
@@ -309,6 +323,28 @@ const actions = {
     const s = await ref.get();
     if (s.exists && s.data().ownerId === uid) await ref.delete();
     return { ok: true };
+  },
+
+  // Owner clears found alerts: one (by id) or all of their own. Only the owner's reports are ever touched.
+  async clearReports(d, uid) {
+    if (!uid) throw fail('Sign in first.', 401);
+    if (d.id !== undefined) {
+      if (typeof d.id !== 'string' || !/^[A-Za-z0-9]{1,40}$/.test(d.id)) throw fail('Bad alert.');
+      const ref = db.doc('foundReports/' + d.id), s = await ref.get();
+      if (s.exists && s.data().ownerId === uid) await ref.delete();
+      return { ok: true, removed: 1 };
+    }
+    let removed = 0;
+    for (;;) {
+      const s = await db.collection('foundReports').where('ownerId', '==', uid).limit(400).get();
+      if (s.empty) break;
+      const batch = db.batch();
+      s.docs.forEach(r => batch.delete(r.ref));
+      await batch.commit();
+      removed += s.size;
+      if (s.size < 400) break;
+    }
+    return { ok: true, removed };
   },
 
   async markReportsRead(d, uid) {
